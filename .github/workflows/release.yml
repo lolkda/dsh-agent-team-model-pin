@@ -1,12 +1,20 @@
 name: release
 
-# Publishes to npm. Two ways to trigger it:
-#   1. push a tag matching v<package.json version>  -> real publish
-#   2. workflow_dispatch with dry_run=true (default) -> full pipeline, no publish
+# Publishes to npm with a provenance attestation, the same way as the other
+# lolkda/dsh-* plugins: npm trusted publishing (OIDC) — there is deliberately
+# no NPM_TOKEN secret to rotate. `id-token: write` is what npm exchanges for a
+# short-lived publish credential.
 #
-# Requires an npm automation token in the repository secret NPM_TOKEN.
-# (Alternative without a token: configure npm "trusted publishing" for this repo
-#  + workflow on npmjs.com, then drop the NODE_AUTH_TOKEN env below.)
+# Triggers:
+#   * push a tag matching v<package.json version> -> real publish
+#   * workflow_dispatch with dry_run=true (default) -> full pipeline, no publish
+#
+# One-time prerequisite on npmjs.com: add this repository as a Trusted
+# Publisher for the package (Settings -> Trusted Publisher):
+#   publisher:            GitHub Actions
+#   organization or user: lolkda
+#   repository:           dsh-agent-team-model-pin
+#   workflow filename:    release.yml
 
 on:
   push:
@@ -21,11 +29,13 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm provenance
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing + provenance; no NPM_TOKEN needed
     steps:
       - uses: actions/checkout@v5
 
@@ -49,16 +59,17 @@ jobs:
       - name: Smoke the built entry
         run: npm run smoke:dist
 
-      - name: Check tag matches package.json version
+      - name: The tag must name the version being published
         if: github.ref_type == 'tag'
         run: |
           set -euo pipefail
-          pkg="v$(node -p "require('./package.json').version")"
-          if [ "$pkg" != "${GITHUB_REF_NAME}" ]; then
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p 'require("./package.json").version')"
+          if [ "$tag" != "$pkg" ]; then
             echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${pkg}"
             exit 1
           fi
-          echo "tag ${GITHUB_REF_NAME} matches package.json ${pkg}"
+          echo "publishing ${pkg}"
 
       - name: Publish (dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
@@ -67,5 +78,3 @@ jobs:
       - name: Publish
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
