@@ -1,0 +1,8 @@
+- insert:
+    - id: agent-team-model-pin
+      name: '@lolkda/dsh-agent-team-model-pin'
+      config:
+        scope: teammates
+        defaults: {}
+        sessions: {}
+        auditPath: ''

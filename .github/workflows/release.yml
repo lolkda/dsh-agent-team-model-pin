@@ -1,0 +1,71 @@
+name: release
+
+# Publishes to npm. Two ways to trigger it:
+#   1. push a tag matching v<package.json version>  -> real publish
+#   2. workflow_dispatch with dry_run=true (default) -> full pipeline, no publish
+#
+# Requires an npm automation token in the repository secret NPM_TOKEN.
+# (Alternative without a token: configure npm "trusted publishing" for this repo
+#  + workflow on npmjs.com, then drop the NODE_AUTH_TOKEN env below.)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: run the whole pipeline but do not publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Smoke the built entry
+        run: npm run smoke:dist
+
+      - name: Check tag matches package.json version
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$pkg" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${pkg}"
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} matches package.json ${pkg}"
+
+      - name: Publish (dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: npm publish --dry-run
+
+      - name: Publish
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

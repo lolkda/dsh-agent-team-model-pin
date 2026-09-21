@@ -1,0 +1,69 @@
+{
+  "name": "@lolkda/dsh-agent-team-model-pin",
+  "version": "1.0.0",
+  "description": "DSH Host plugin: pin Agent Team teammate model requests to a chosen provider / model / reasoningEffort, editable per session",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "cordis-plugin",
+    "plugin",
+    "agent-team",
+    "teammate",
+    "llm",
+    "model",
+    "reasoning-effort"
+  ],
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "node --test tests/*.test.mjs",
+    "check": "npm run typecheck && npm run build && npm test",
+    "smoke:dist": "node -e \"import('./dist/index.js').then(m=>{if(m.name!=='agent-team-model-pin'||typeof m.apply!=='function')throw new Error('dist entry smoke failed');console.log('dist entry OK:',m.name,JSON.stringify(m.inject))})\"",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run check && npm run smoke:dist"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2"
+  },
+  "license": "MIT",
+  "author": "lolkda",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lolkda/dsh-agent-team-model-pin.git"
+  },
+  "homepage": "https://github.com/lolkda/dsh-agent-team-model-pin#readme",
+  "bugs": {
+    "url": "https://github.com/lolkda/dsh-agent-team-model-pin/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
