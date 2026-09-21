@@ -159,7 +159,16 @@ npm run build      # tsc -p tsconfig.build.json → dist/
 - 推 `v*` 标签 → 真实发布 `npm publish --provenance --access public`。工作流会校验标签等于 `v` + `package.json.version`，不匹配即失败。
 - 或手动 `workflow_dispatch`，其 `dry_run` 输入**默认为 true** → 跑完整流水线但只执行 `npm publish --dry-run`。
 
-**需要仓库 secret `NPM_TOKEN`**：发布步骤用 `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}` 认证，请在本仓库 Settings → Secrets and variables → Actions 配置一个 npm automation token。若不使用 token，可改为在 npmjs.com 为本仓库 + 工作流配置 **trusted publishing（OIDC）**，然后删掉该 `NODE_AUTH_TOKEN` 环境变量。
+**认证走 npm trusted publishing（OIDC），不需要任何 secret**：与其它 `lolkda/dsh-*` 插件一致，工作流只声明 `id-token: write`，npm 用这个 OIDC 令牌换取一次性发布凭据，因此**没有 `NPM_TOKEN` 需要轮换**。一次性前提是在 npmjs.com 为该包登记 Trusted Publisher（Settings → Trusted Publisher）：
+
+| 字段 | 值 |
+|---|---|
+| Publisher | GitHub Actions |
+| Organization or user | `lolkda` |
+| Repository | `dsh-agent-team-model-pin` |
+| Workflow filename | `release.yml` |
+
+未登记时，工作流会在 `Publish` 步骤以 `npm error code E404 / 404 Not Found - PUT https://registry.npmjs.org/@lolkda%2fdsh-agent-team-model-pin` 失败——注意此时 **provenance 已经签名成功**，说明 OIDC 交换本身是通的，缺的只是这次登记。
 
 **打包**：`files` 只含 `dist`、`cordis.patch.yml`、`README.md`、`LICENSE`，而 `dist/` 被 `.gitignore` 忽略——这个组合本来会让干净检出打出的 tarball 缺少 `dist/`。现在由 **`prepare`**（`npm run build`）兜住：npm 在 `npm install` / `npm ci` / `npm pack` / `npm publish` 时会自动运行它，所以
 
