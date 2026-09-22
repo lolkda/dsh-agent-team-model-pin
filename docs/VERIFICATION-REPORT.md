@@ -1,5 +1,7 @@
 # 独立验证报告 · dsh-agent-team-model-pin
 
+> **历史版本说明**：下文冻结指纹与独立队友验收对应插件 **1.0.0**。用户随后批准 **1.1.0 Web 菜单扩展**，并要求本轮不使用 Agent Team；因此本轮实现、测试由主 Agent 单独完成，不冒用下文的独立验收结论。最新交互契约见 [SPEC §10](SPEC.md#10-web-模型菜单扩展v14插件-110)，使用方式与激活边界见 [README](../README.md)。
+
 | 项 | 值 |
 |---|---|
 | 验证人 | `verifier`（Agent Team teammate，独立于实现者） |
@@ -16,6 +18,70 @@
 > - `task-8`：仅文档（README 版本引用对齐 v1.2 + 指纹刷新）。
 > - **`task-9`（结构性变更）**：插件由「零构建本地 bundle」改造为**可发布到 npm 的公开包** —— 包名 `@local/…` → `@lolkda/…`、入口 `src/index.ts` → 构建产物 `dist/index.js`、`schemastery` 由 peer 改为 dependency、SPEC 重写 §6 并新增 9.13–9.15。**关键事实：`src/pin.ts`、`src/index.ts`、`tests/pin.test.mjs`、`tests/command.test.mjs` 四项 hash 与首版逐字相同**，故 §3–§9 关于行为契约（第 4–7 节）的全部结论**无需重开**；新增的打包/发布维度见 §11，指纹见下方「冻结工件」。
 > - **`task-10`（收尾）**：修掉 §11.5 报的打包陷阱（`package.json` 新增 `prepare`，SPEC §6 同步）；并在**新形态下重跑队友 e2e**（e2e#2，见 §12.2）。**仅 `package.json`（+`prepare`）、`docs/SPEC.md`（§6 一行）、`README.md`（同步 `prepare` 与打包说明）三个文件变化；`src/`、`tests/`、`tsconfig*`、`cordis.patch.yml`、`.github/**`、`dist/*` 全部未变。**
+
+## 1.2.3 Team 菜单恢复与真实队友核验（当前结论）
+
+- 用户报告 Team 两行仍未显示；实时检查发现旧组件登记存在但 active false，原生菜单接回。真实 ModelDirectoryResolver + SlotRegistry/renderer 测试复现 `remote.session without inject` → abdicated → 原生回退。
+- Client 补齐 `remote.session`，并消费原生目录 load rejection（错误仍由 store 显示）；版本标记更新到 1.2.3，不改优先级、布局、settings 契约或 Host 同步。
+- 新增 10 项原生 Client 集成回归；完整 **139/139 tests**、类型、构建、smoke、diff 检查通过。对实际安装产物另跑 **13/13** 原生 Client/冷启动/Web 恢复测试通过。
+- 管理器已保存/启用 1.2.3，但 Host 返回 **restart-required**；单独观测页面 Client 已加载 `agent-team-model-pin-ui-1.2.3`、active true。未将整包状态报告为 applied，未自动重启服务。
+- 用户明确确认“出现了”，随后明确要求创建真实 Team 队友。`team-model-check` 报告模型 `deepseek-flash`、provider `cpa`；Host 6 条请求审计均指向 `deepseek-flash / high`，首条从继承的 `gpt-6-astra` 切换。任务 task-1 已完成，队友 inactive。此项是真实 Team 请求，不是前述离线 adapter。
+- 当前 `list_agents.model` 仍为构造期 gpt-6-astra，不能用该列否定实际路由；本轮未改这一官方字段。
+- 详见 [1.2.3 Client 修复报告](CLIENT-FIX-1.2.3.md) 和 `artifacts/1.2.3/team-check-audit.jsonl`。
+
+## 1.2.2 冷启动故障修复（历史 Host 验证，UI 结论由上节补充）
+
+- 用户报告的重启后 persona 重复注册已通过真实 Loader/runtime resolver/AgentPresets 回归复现；1.2.1 安装第二套核心 SDK，使 profile SystemPrompt 与 deployment scope 的模块身份分裂。
+- 将核心 SDK 移出生产依赖，`dsh-agent` 改为 optional peer，开发 SDK 仅供测试/类型检查；继续使用宿主公开 `installModelSelection()`，不修改官方包或 preset，不吞重复错误。
+- 最终 `npm run check` **129/129 tests**、typecheck、build、Host/Web smoke、diff whitespace 检查通过；真实启动用例本次无 skipped。
+- 管理器已安装并激活 **1.2.2**，返回 `application: applied`，仅增加一个插件包。当前页面插件插槽 priority -100、active true。
+- 对实际安装产物启动两个独立完整 DSH Web 进程，验证官方 `cordis` 创建 → 磁盘持久化 → 进程退出 → 冷恢复 → 继续对话；设置和两条旧响应保留，两会话路由隔离。模型 I/O 使用本地模拟 adapter，不冒充外部供应商调用或真实 Team 队友验收。
+- 当前用户 3080 服务未重启，测试 profile/存储/监听端口均已释放。Client 与同步算法保持 1.2.1 字节一致；保留原始包、失败探针和成功证据。
+- 详细根因、恢复步骤、测试夹具 source 字段修正及校验和见 [1.2.2 修复报告](STARTUP-FIX-1.2.2.md)，机器可读结果见 `artifacts/1.2.2/web-restart-summary.json`。
+
+## 1.2.1 Host 模型身份同步（历史，冷启动结论已被上节修正）
+
+> 以下记录保留历史事实，不再作为 1.2.1 可安全重启的依据。裸 Node import / peers check / 统一 workspace SDK 的测试绕过了真正的 profile Loader 解析；“必须显式安装完整 SDK”的推断不成立。
+
+- 修复边界：复用官方 `installModelSelection()`，通过真实 Agent 作用域同步提示词变量和本步请求；不修改 `agent.options`、prompt-manager 或菜单样式。
+- 首个真实作用域回归先复现：请求已为 deepseek-flash，提示词仍为 gpt-6-astra。随后覆盖设置中途变化、重试、两组 Team 隔离、新建/恢复、预览隔离、原生选择器与通知共存、部分字段钉、卸载、审计及晚期选路冲突。
+- **126/126 tests**、typecheck、build、Host/Web smoke、打包和 diff whitespace 检查通过。
+- 实际 AgentLoop 集成测试验证了完整的组装 → admitted step → frozen request → request/header 路径；模型 IO 被有意替换为请求捕获边界，故这不是实际供应商调用。
+- 1.2.0 首次生产安装暴露了 profile 禁止自动安装 peer：独立加载缺少 dsh-agent。1.2.1 显式声明必需的 SDK 运行时依赖；安装后 `pnpm peers check` 返回无问题，已安装 Host 模块在新进程成功加载。
+- 将已安装插件与部署目录的 Core/AgentLoop 包混用的独立集成检查也通过，验证真实宿主 Context 与插件依赖的互操作。
+- Client/controller/view/layout/policy 的四个 JS 工件与 1.1.4 原始 tarball **逐字节相同**。Client 注册标记仍为 1.1.4，不用于证明本次 Host 升级。
+- 管理器已保存并启用 1.2.1，但返回 **restart-required**。当前进程的新 Host 激活及真实队友验证仍待重启，不能报告为已经上线。未新建队友、未修改官方包、未提交或推送 Git、未发布 npm。
+- 包：`lolkda-dsh-agent-team-model-pin-1.2.1.tgz`，19 个文件；npm shasum `03022fe39b9d5c84e8c33453210297501d3068e8`。
+- tarball SHA-256：`3ae9811a7d865e980b4fdd0a16c738f6f1361ad6187cebcfbc0e9005a62f9a9a`；同步模块 SHA-256：`6597e9a8a5558731aa93f6bad94dee0ea59dffc893f0c2eee727169c6e56b78c`。
+
+## 1.1.3 原生交互与注入修复（主 Agent 单独执行）
+
+- 用户截图证明 1.1.2 虽然已经显示 Team 行，仍存在两个实际缺陷：通用 Menu 向侧边展开，破坏移动端原生交互；漏掉 `remote` 注入，使 Team 设置读取失败。因此此前的插槽选中证据不能当成功能验收。
+- 恢复当前 DSH 原生 ModelSelect 的按钮尺寸、字体、透明背景及圆角卡片风格。改为一个固定定位弹层，点击切换列表，有可点击返回按钮，选项在内部滚动；按 visualViewport 限制位置和尺寸，不依赖 hover，也不创建侧面子菜单。
+- Client 显式注入 `remote`。测试使用真实 Cordis 的兄弟 provider fiber，而不是直接从 root 提供服务；后者会错误地授予祖先访问、掩盖缺少 inject 的问题。故意移除 remote 的负向用例能复现截图中的 `without inject` 错误，正常声明则能调用设置 API。
+- 保留主模型默认 effort 的显示；重复点当前主模型不会把原有 effort 重置。Team 选择仍只写当前 Team 的 settings 路径，主模型仍只调用共享目录。
+- **108/108 tests**、类型检查、构建、smoke、打包、diff whitespace 检查通过。覆盖真实 SlotCore 选中、React DOM 点击/返回/键盘/焦点/卸载，320/375/768 宽度、缩小的 visualViewport、保存失败及只读隔离。jsdom 与几何测试不是实机像素布局或截图测试。
+- 生成 1.1.3 tarball（17 个文件），shasum `963652d7d47105356dc6ee593f35c724d0de7114`。SHA-256 比较确认 Host 入口字节未变；React、React DOM 与图标通过宿主共享模块加载。
+- 管理器安装先返回 `restart-required`，随后显式重新启用返回 `applied`。当前连接页面的实时检查显示 **registrant `agent-team-model-pin-ui-1.1.3`、priority -100、active true**；原生 priority 0 为 inactive。版本化 registrant 证明加载的是本次 Client，而不是从相同 Slot id 推测代码已更新。
+- 未使用队友，未发布 npm 或推送 Git。实际手机/pad 触控、当前页面像素效果和真实用户点选后的持久化仍需用户确认，不作已完成实机验收的声明。
+
+## 1.1.2 插槽优先级修复（主 Agent 单独执行；历史状态）
+
+- 用户在 1.1.1 重启后仍看到原菜单。Client 实时查询确认新组件**已经注册**，但 `priority: 100, active: false`，原生组件 `priority: 0, active: true`。
+- DSH 实际规则是单插槽按 priority 升序取最低值；实现改为 **-100**。旧测试错误地假定注册即获选，现已改用真正的 `@deepseek-ai/dsh-client-ui-slots` `SlotCore`，先与原生 priority-0 控件竞争，再渲染实际获胜组件。旧代码下 5 项组件测试均失败，修复后全部通过；另覆盖卸载恢复原生组件。
+- 完整 `npm run check`：**92/92 tests**、类型检查、构建通过；smoke 和打包通过。SHA-256 比较确认 Host 入口字节未改动，本轮仅修客户端选中顺序。
+- 安装 1.1.2 时安装器先返回 `restart-required`；随后通过管理器重新启用得到 `applied`。**不凭这两个返回值推断成功**：再次查询当前连接页面，得到 `priority: -100, active: true`，原生 `priority: 0, active: false`。这证明当前页面已经选中新组件，不需要再为本次修复重启服务。
+- 本轮未使用队友。当前没有浏览器点击/截图自动化，展开菜单和实际点选保存仍需用户确认；不把 SlotCore/React 测试或插槽选中状态冒充截图验证。
+
+## 1.1.0 补充验收（主 Agent 单独执行；历史状态）
+
+- `npm run check`：typecheck、build、**89/89 tests** 全部通过；含原有 59 项、UI 策略、Host 装配与 4 项真实 React 组件测试。
+- `npm run smoke:dist`：Host 根入口、Web Host 入口均可加载，Client factory 脚本语法通过。
+- `npm pack`：生成 `lolkda-dsh-agent-team-model-pin-1.1.0.tgz`，13 个文件；React 与原生 Menu 仍为外部共享模块。
+- 回归测试先观察失败再实现：显式跟随、模型默认、会话作用键/CAS、同菜单布局；另复现并修复保存期间点击触发器导致保存结果丢失，以及 legacy effort-only 钉意外改变路由的问题。
+- 安装最终 tarball：包管理器 exit 0，`changed: true`，**`application: restart-required`**。这只证明升级已保存，不证明新版已在当前进程运行。
+- 当前连接页面的插槽查询仍为原生 `lc`（priority 0）；因此**实际新菜单显示、真实点击持久化、刷新后恢复及真实队友请求仍待 DSH 重启后的页面验收**。未启动任何队友或子代理来执行本轮开发/测试。
+- 以下旧报告、hash 和独立性声明继续只属于 1.0.0，不能用它们给本轮升级背书。
 
 ## 冻结工件（本次结论只对这些字节有效）
 

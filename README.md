@@ -1,189 +1,173 @@
 # dsh-agent-team-model-pin
 
-**一句话**：Agent Team 的 teammate 默认继承 Lead 的模型；本插件把队友实际发出的模型请求钉到指定的 `provider / model / reasoningEffort`，可按 session 改写，改完下一个请求即生效。
+DSH Agent Team 模型选择插件。**1.1.0 起直接在输入框原来的模型菜单里选择 Team 模型与推理等级**，无需手输命令。
 
-**机制一句话**：拦 `agent/request` 瀑布，在 `next()` 返回的 `LlmCallConfig` 上按解析结果改写 `provider / model / reasoningEffort`；不改官方包、不改任何 shipped preset。
+源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。UI 扩展及本轮 Host 同步修复均由主 Agent 单独完成。
 
-契约源：[`docs/SPEC.md`](docs/SPEC.md)（**v1.3**，源码 TS + 发布构建产物；v1.1–v1.3 的裁定见其第 9 节）。独立验证报告见 [`docs/VERIFICATION-REPORT.md`](docs/VERIFICATION-REPORT.md)。
+## 直接在菜单里选
 
----
+点击输入框右下角现有的模型按钮。桌面、手机和平板均只显示一个弹层：**点击进入选项列表，用返回按钮回到根菜单**，不需要 hover，也不向侧面展开第二个菜单：
 
-## 1. 配置
+```text
+模型                  当前主模型  ›
+推理等级                   High  ›
+──────────────────────────────────
+Team 模型          跟随主 Agent  ›
+Team 推理等级      跟随主 Agent  ›
+```
 
-插件行的 `config` 共四项（默认值即 `cordis.patch.yml` 里的中性配置）：
+- 上面两项继续控制**主 Agent**，通过 DSH 原有共享模型目录完成选择。
+- 下面两项控制**当前会话的 Team**，以 Lead 会话 ID 保存；切换会话不会串配置。
+- 模型按提供商的目录顺序展示，并显示提供商名称；推理等级只列出该模型支持的选项。
+- **跟随主 Agent**可覆盖组合配置里的固定模型；跟随时也可以单独指定 Team 的推理等级。
+- **模型默认**清除此前继承的推理等级。切换 Team 模型会自动恢复模型默认，不把旧模型的 effort 带过去。
+- 保存带 revision 校验；冲突或失败直接显示在菜单中，不会假装成功。失败时可以点「重试」。
+- 默认 `scope=teammates` 不影响 Lead；高级配置主动设置 `members/all` 时仍遵守该扩大后的作用范围。
+
+保存后从已有队友的下一次提示词组装生效，无需重建队友；当前步骤及其重试保持同一选择，已发出的请求不会被修改。跟随源是 Lead 已生效的请求路由；尚未进入提示词组装的主模型选择仍受 DSH 原生生效边界控制。
+
+## 安装与升级
+
+本地开发：
+
+```bash
+npm ci
+npm run check
+```
+
+在 Harness 中使用插件管理器安装目录或打包工件（发布后也可用 npm 包名）：
+
+```text
+plugin_manager action=install_bundle target=/app/project/dsh-files/dsh-agent-team-model-pin
+```
+
+安装影响当前 profile 的所有会话，Team 配置则按会话隔离。Web UI 需要启用 DSH 原生模型选择器及 Agent Teams Web 功能。
+
+**升级必须区分保存与激活**：
+
+- `application: applied` 后仍需核对 Host 插件行及 Client 插槽是否实际激活。
+- `application: restart-required` 表示升级包已保存，但**新代码尚未加载**。应重启当前 DSH 服务，再刷新原页面；只刷新浏览器不能替换 Host 已缓存的模块。
+- 已加载后修改 Team 设置不需要重启。不要把配置即时生效误解为代码升级也能即时生效。
+
+**1.1.1 修复客户端发现**：默认 bundle 必须挂载包根 `@lolkda/dsh-agent-team-model-pin`，不能使用 `/web` 子路径。DSH 的客户端扫描器会跳过包子路径，即使该 Host 行显示 active。浏览器工件为 `dist/client.js`，只接管 `conversation.input.model`；卸载后由原生选择器接回。
+
+**1.1.2 修复插槽优先级**：DSH 单插槽按 priority 升序选中最低值，原生选择器是 0。插件现使用 **-100**，而不是会被原生控件遮住的 100。测试通过真实 DSH `SlotCore` 选出组件后再用 React 渲染，并验证卸载恢复原生选择器，不再用假注册器预设插件获胜。
+
+卸载：
+
+```text
+plugin_manager action=remove_bundle target=@lolkda/dsh-agent-team-model-pin
+```
+
+用户配置与审计是独立数据，卸载不会删除它们。
+
+## 1.1.3 交互修复
+
+- 恢复原生模型按钮的尺寸、字体和透明背景，以及原生风格的圆角菜单；不再另加 Team 标记挤占按钮空间。
+- 模型与推理等级在同一个弹层中切换，点击即可进入，有返回按钮；长列表在弹层内部滚动，不会向屏幕外再开一个侧菜单。
+- 按可视视口限制弹层位置和宽高，兼容窄屏与软键盘造成的可视区域变化。
+- **1.1.4 注入补正**：必须同时声明 `remote`、`remote.settings`、`remote.agentTeams`，只声明根 facade 不够。两类 RPC 命名空间均有独立的正向与缺失注入回归；本次不修改 1.1.3 的界面或样式。
+- 保留主模型的默认推理等级显示，重复选择当前主模型不会把现有推理等级重置。
+
+## 1.2.0 提示词与请求同步
+
+- 复用 DSH 公开的 `installModelSelection()`，在 Agent 作用域内同步提示词的 `model/provider` 和请求目标，不修改 `agent.options` 或 prompt-manager。
+- 选择在提示词组装时捕获；设置中途改变不会影响当前步骤或重试。无信号的预览也不会替换正在执行的快照。
+- 与原生模型选择器共存时，Team 规则仍优先；只保留与最终目标一致的新模型切换通知，用户文本和历史记录不改。
+- 保留旧式部分字段钉、跟随、模型默认及六字段审计。新的/恢复的 Agent 和已有 Agent 均接入，卸载移除对应监听。
+- 标准作用域请求未经组装或出现晚期选路冲突时明确报错，避免发送错误的模型说明。没有 Agent 作用域的旧式自定义驱动保留请求级兼容，不承诺提示词同步。
+- 需要提供该官方选择器的 DSH SDK（本次验证版本 `0.1.6-alpha.2`）。本版只改 Host，Client 代码及样式与 1.1.4 保持一致；Client 注册标识仍为 1.1.4，不能拿它证明本次 Host 升级。
+- 新增真实 Cordis/Scope/SystemPrompt/原生选择器回归及真实 AgentLoop 的冻结请求集成验证；测试里的模型 IO 为捕获边界，不冒充真实模型调用。
+
+### 1.2.2 修复安装后重启无法对话
+
+**请跳过 1.2.1，使用已包含本节修复的 1.2.3。** 1.2.1 把 DSH 核心 SDK 放进 `dependencies`，会在 hoisted profile 中安装第二套 `system-prompt` / `scope` 等包。重启时 Loader 的全局注册器来自 profile，官方 preset/AgentLoop 仍使用部署目录的 scope；两份 scope 标签不相识，使 persona 被当成全局重复注册，报 `deployment:persona-prefix ... already registered`。
+
+1.2.2 修复的是**发布依赖边界**，不重写模型同步或菜单：
+
+- 核心 SDK / Cordis 只作为开发依赖；运行时由 DSH 自己的 profile resolver 提供。
+- `dsh-agent` 声明为 **optional peer**（本版支持 `0.1.6-alpha.2`），避免包管理器自动再安装一套核心包；仍复用宿主的公开 `installModelSelection()`。
+- 不改 shipped preset、全局注册器、scope 实现或 prompt-manager，也不吞掉重复注册错误。
+- 新增真实 Loader → runtime resolver → AgentPresets → persona 冷启动回归；检查插件确实 active、官方选择器是宿主同一个模块实例，以及两个会话的 persona 隔离与释放。
+
+`autoInstallPeers: false` 不表示 DSH 运行时无法提供 SDK。**脱离 DSH 启动器单独用 `node import()` 检查已安装插件，不能作为安装失败的证据**；它没有启动 DSH 的模块回退解析器。开发源码可通过 `npm ci` 安装开发依赖后检查。
+
+若仍装着 1.2.1，建议先在插件管理器中**移除旧 bundle**（只禁用不一定清除污染解析的核心依赖），再安装 1.2.3、重启该 DSH、刷新页面。保留原有 settings 和会话数据；若同一 profile 的其它插件也显式安装核心 SDK，需另行检查其依赖归属，不要手删 SDK 或官方 persona。
+
+真实启动回归需要 PATH 中可找到 DSH，或设置 `DSH_TEST_INSTALL_ROOT` 为 DSH 安装根；测试在唯一临时目录和独立 Node 进程中运行，无 DSH 环境时明确显示 skipped。可用 `DSH_TEST_PACKAGE_ROOT` 指向已安装或已解包的候选插件以检查最终产物。
+
+### 1.2.3 修复 Team 菜单消失
+
+此前 Client 漏声明了 `remote.session`。原生模型目录在首次创建时会读取这个命名空间，触发 `cannot get property "remote.session" without inject`，DSH 随后撤下出错组件并显示原生的“模型／推理等级”两项。已有目录缓存可能使热安装看似正常，刷新或切换新会话后才暴露问题。
+
+- 补齐 `remote.session` 依赖，保持 priority -100、原菜单布局和 Team 设置格式不变。
+- 原生模型目录加载失败继续通过其 store 显示错误，同时消费 Promise rejection，避免未处理拒绝。
+- Client registrant 为 `agent-team-model-pin-ui-1.2.3`，组件 DOM 标记为 `data-team-model-pin="1.2.3"`。
+- 新增真实原生模型目录、SlotRegistry/renderer 与原生回退组件的冷/热目录测试。旧 UI 测试的假 `directoryFor()` 没有覆盖这一调用链，不能再用它单独证明 UI 可用。
+- 1.2.2 的 Host 冷启动修复保留；没有重新安装核心 SDK，没有改 Host 模型同步、settings 或历史会话。
+
+安装后要在当前页面真正展开菜单，确认四项控制均存在并能保存。只看到 bundle enabled 或注册瞬间 active 不算界面验收；已出错的旧 Client 需要加载新版本，必要时刷新原页面。若管理器返回 restart-required，新 Host 尚未生效，按安装结果处理，不把刷新浏览器当作 Host 重启。
+
+## 命令仍然保留
+
+```text
+/team-model
+/team-model cpa deepseek-flash low
+/team-model clear
+```
+
+`show`（或无参数）只读查看配置；`set` 在写入前校验 route 与 effort，非法输入不写入。`clear` 只移除运行期层，若组合层仍有钉会明确说明；菜单的「跟随主 Agent」则可显式覆盖组合层。
+
+## 高级配置
+
+默认使用中性配置，不固定任何模型：
 
 ```yaml
 - id: agent-team-model-pin
   name: '@lolkda/dsh-agent-team-model-pin'
   config:
-    scope: teammates        # teammates | members | all，默认 teammates
-    defaults: {}            # { provider?, model?, reasoningEffort? }，默认空（不钉）
-    sessions: {}            # { "<sessionId>": { provider?, model?, reasoningEffort? } }，默认空
-    auditPath: ''           # 空 → $DSH_HOME/agent-team-model-pin/audit.jsonl
+    scope: teammates        # teammates | members | all
+    defaults: {}
+    sessions: {}
+    auditPath: ''
 ```
 
-| 字段 | 类型 | 默认 | 含义 |
-|---|---|---|---|
-| `scope` | `teammates` \| `members` \| `all` | `teammates` | `teammates` 只对 `role === 'teammate'` 生效；`members` 含 Lead；`all` 连非团队成员也生效（此时作用键取 `agent.id`）。非法值只告警一次并回退 `teammates`。 |
-| `defaults` | Pin | `{}` | Composition 默认层。 |
-| `sessions` | `{ [sessionId]: Pin }` | `{}` | Composition 会话层，键是**作用键**（见下）。 |
-| `auditPath` | string | `''` | 审计文件路径；空串/全空白 → `$DSH_HOME/agent-team-model-pin/audit.jsonl`，`DSH_HOME` 未设置时回退 `~/.dsh/agent-team-model-pin/audit.jsonl`。非字符串只告警并回退默认值。 |
+普通 Pin 字段为 `provider? / model? / reasoningEffort?`，优先级为：
 
-`Pin = { provider?: string; model?: string; reasoningEffort?: string }`，逐字段去首尾空白，**空串或全空白视为未设置该字段**。
+1. settings 的 `agent-team-model-pin.sessions[LeadSessionId]`
+2. 组合配置 `sessions[LeadSessionId]`
+3. 组合配置 `defaults`
 
-**作用键**：队友的作用键是 `membership.root.id`（即它的 Lead 会话 id），所以"在会话 A 设的钉"只影响 A 的队友；`scope='all'` 的非成员用自身 `agent.id`。
+普通字段继续逐字段合并。UI 增加两个显式标志：`followLeader: true` 忽略下层固定路由，`modelDefault: true` 清除继承 effort。它们只供策略解析，不会传给 LLM 提供商。
 
-配置非法值一律**只告警不抛**，对应层按空处理。
+UI 复用 `settings.describe/mutate`，组合元数据只取不可变 `base`，保存只改选中会话的路径并携带 namespace revision。没有新增 Remote、Service 或模型工具。
 
----
+## 审计与限制
 
-## 2. 命令
+默认审计位置：`$DSH_HOME/agent-team-model-pin/audit.jsonl`。每行包含 `at/sessionId/agentId/role/from/to`，异步串行追加；失败告警一次，不阻断模型请求。
 
-| 语法 | 行为 |
+- `list_agents` 的 `model` 列仍是构造期显示值，不等于实际请求路由，以审计为准。
+- 不管理普通 `subagent/subagent_fork` 的模型选择。
+- Provider 下架后不会在请求时自动换到其它模型，请重新选择有效路由。
+- 审计不提供跨进程写锁。
+
+## 开发、测试与发布
+
+| 命令 | 用途 |
 |---|---|
-| `/team-model` 或 `/team-model show` | 查看本会话的有效钉、来源层、作用键与 scope；不写入任何状态。 |
-| `/team-model <provider> <model> [effort]` | 写入**运行期层**（settings）；先校验 route，校验失败则 `{ kind: 'error', text }` 且**零写入**。 |
-| `/team-model clear` | 清除本会话的**运行期层**。 |
+| `npm run typecheck` | 严格 TypeScript 检查 |
+| `npm run build` | tsc 生成声明与 JS，esbuild 生成 Web Host 入口和浏览器 lazy factory |
+| `npm test` | 原有回归、UI 策略、Host 装配、React 组件测试 |
+| `npm run check` | typecheck → build → test |
+| `npm run smoke:dist` | 检查两个 Host 入口与浏览器脚本语法 |
+| `npm pack --dry-run` | `prepare` 自动构建后核对发布文件 |
 
-其它形态（1 个非关键字 token，或 ≥4 个 token）→ `{ kind: 'error', text: '用法：/team-model <provider> <model> [effort] | /team-model show | /team-model clear' }`，**不写入任何状态**。
+测试需要 Node 24（直接导入可擦除 TypeScript）。浏览器使用 Harness 的共享 React、React DOM 与原生图标，**不打包第二份 React/React DOM**。单面板保持原生 ModelSelect 的布局与主题规范。测试使用真实 Cordis、SlotCore、React DOM 和 jsdom，覆盖注入、点击、返回、焦点和保存；纯几何测试覆盖窄视口边界。它们不代替真实手机/pad 的布局与触控验收。
 
-细则（与实现逐字一致）：
+`dist/` 不提交进 Git，但 `prepare` 自动构建。npm 包只含 `dist`、bundle patch、README、LICENSE 和 package metadata，不含源代码、测试或开发依赖。
 
-- `show` / `clear` 单 token 比较前会 `trim()` 且**大小写不敏感**。
-- 两 token 形态按 arity 解析为 `set(provider=token0, model=token1)`，所以 `/team-model clear me` 会被当作"把 provider 设成 `clear`、model 设成 `me`"，随后被 route 校验以"provider 未注册"拒绝——错误文本 + 零写入，不构成误写风险。
-- **`clear` 只清运行期层**，Composition 层（`config.sessions` / `config.defaults`）不受影响。清完后若该作用键仍被组合配置钉住，返回文本会明确说明，例如：
-  `已清除本会话（<sessionId>）的运行期钉；但该作用键仍被组合配置钉住：当前会话模型钉：provider=…, model=…（来自 Composition 层，需改组合配置才能解除）。`
-  仅当组合层也无钉时，才返回 `已清除本会话（<sessionId>）的运行期钉；当前无生效钉。`
-- `settings` 服务不可用时：`show` 返回错误文本并附带 Composition 层解析结果；`set` / `clear` 返回明确错误文本，**不抛**。
-- `set` 时 `llm` 服务不可用 → 错误文本，零写入。
-
-`set` 的校验（`provider` 已注册；`provider+model` 能被 `resolveModelInfo` 解析；只给 `model` 用 fallback provider；给 `effort` 时模型必须公布该 effort）失败会抛出一句可直接展示的错误，命令侧转成 `{ kind: 'error', text: '校验失败，未写入任何状态：…' }`。
-
----
-
-## 3. 三层解析与字段级部分覆盖
-
-解析顺序（**就近优先**）：
-
-1. **运行期层** —— settings 命名空间 `agent-team-model-pin` 下的 `sessions["<sessionId>"]`（`/team-model` 写入的层，持久化到 `$DSH_HOME/settings.yaml`）；
-2. **Composition 会话层** —— `config.sessions["<sessionId>"]`；
-3. **Composition 默认层** —— `config.defaults`。
-
-**字段级合并**：高层的某个字段为 `undefined`（或空串，归一化后等同未设置）就沿用低层该字段；层整体缺失视为"无该层"。
-
-例：`defaults = { provider: alpha, model: a-1, reasoningEffort: high }`，运行期层 `{ model: a-2 }` → 有效钉 `{ provider: alpha, model: a-2, reasoningEffort: high }`。
-
-**effort 语义（R4）**：pin 指定了 `provider` 或 `model` → 丢弃被继承的 `reasoningEffort`，除非 pin 自己给了 effort；pin 只给 effort → 保留原 `provider` / `model`。其它调用配置字段（`temperature` / `maxTokens` / `stop` 等）不被触碰。
-
-**生效时机（R5）**：请求进入 `agent/request` 时按当时解析结果改写；不回改历史请求；不影响已存在队友的存活；改钉**无需重启、无需重建队友**。
-
----
-
-## 4. 审计
-
-每次实际改写追加一行 JSONL 到 `auditPath`（默认 `/app/.dsh/agent-team-model-pin/audit.jsonl`；目录不存在时首次写入自动 `mkdir -p`）。每行字段（SPEC 5.5）：
-
-```json
-{"at":"<ISO8601>","sessionId":"…","agentId":"…","role":"teammate","from":{"provider":"…","model":"…","reasoningEffort":"…"},"to":{"provider":"…","model":"…","reasoningEffort":"…"}}
-```
-
-- `from` = 被拦请求原来的路由，`to` = 改写后的路由，`reasoningEffort` 为 `undefined` 时该键不出现。
-- `role` 只在团队成员身上存在；`scope='all'` 命中的非成员省略该字段（不写 `null`）。
-- 写入是**串行 fire-and-forget**，不 `await`，不阻塞模型请求；写失败（含文件不可写）只记一次 `logger.warn`，**绝不抛错、绝不阻断请求**。
-
----
-
-## 5. 安装与卸载
-
-安装在当前 profile 层，对所有 session 生效。`plugin_manager` 需要 danger-full-access 权限或本次调用的审批。
-
-**安装**
-
-```
-plugin_manager  action=install_bundle  target=/app/project/dsh-files/dsh-agent-team-model-pin
-```
-
-（`target` 用包的**绝对路径**（本地 `link:` 安装）或包名 `@lolkda/dsh-agent-team-model-pin`（发布到 npm 后）；包内 `dsh.bundle.patch = ./cordis.patch.yml`，行 id `agent-team-model-pin`。）
-
-装完用 `plugin_manager action=list_plugins` 确认行 `include:agent-team-model-pin` 的 `fiberPhase` 为 `active`。若结果为 restart-required，该能力**尚未**可用，需重启进程后才生效。
-
-**卸载**
-
-```
-plugin_manager  action=remove_bundle  target=@lolkda/dsh-agent-team-model-pin
-```
-
-**开发期前提**：包内 `node_modules` 必须是装好的，在包目录执行一次
-
-```
-npm install
-```
-
-`@deepseek-ai/schemastery` 是 **`dependencies`**（v1.3 起，不再是 peerDependency），`npm install` 会把它落地为包内真实目录 `node_modules/@deepseek-ai/schemastery`。因此**不再需要**手工创建符号链接（v1.3 已取消该前提）。
-
-**发布形态是 `dist/`**：消费者实际加载的是**构建产物**（`exports` → `dist/index.js` + `dist/index.d.ts`），所以从干净检出开始必须先构建：
-
-```
-npm install        # 装依赖（含 devDependencies：typescript、@types/node）
-npm run build      # tsc -p tsconfig.build.json → dist/
-```
-
-`dist/` 已被 `.gitignore` 忽略、不进仓库。若 `dist/` 缺失，profile 加载该包会因入口文件不存在而失败（插件行不会 `active`）。
-
-**卸载后**：`$DSH_HOME/settings.yaml` 里的 `agent-team-model-pin` 段落与审计文件是独立数据，不会被自动删除，需要时手动清理。
-
----
-
-## 6. 仓库与发布
-
-- **仓库**：<https://github.com/lolkda/dsh-agent-team-model-pin>
-- **许可证**：MIT（见 [`LICENSE`](../LICENSE)）
-- **发布包名**：`@lolkda/dsh-agent-team-model-pin`（`publishConfig.access = public`，registry 为 `registry.npmjs.org`）
-
-**脚本**
-
-| 脚本 | 作用 |
-|---|---|
-| `npm run typecheck` | `tsc -p tsconfig.json`（`noEmit`，只做类型检查） |
-| `npm run build` | `tsc -p tsconfig.build.json` → `dist/`（含 `.d.ts`；`rewriteRelativeImportExtensions` 把 emit 的 `./pin.ts` 改写为 `./pin.js`） |
-| `npm test` | `node --test tests/*.test.mjs`（测试直接加载源码 `.ts`，靠 Node type stripping） |
-| `npm run check` | 依次跑 `typecheck` → `build` → `test` |
-| `npm run smoke:dist` | 断言 `dist` 入口导出的 `name` 与 `apply` 形态 |
-| `prepare` | `npm run build`；由 npm 在 **`npm install` / `npm ci` / `npm pack` / `npm publish` / git 安装**时自动触发，因此 `dist/` 不会因被 `.gitignore` 忽略而缺失 |
-| `prepublishOnly` | `check` + `smoke:dist`；**`npm publish` 会自动先跑它**，所以发布会带上构建产物 |
-
-**CI**（[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)）：push / PR / 手动触发，Node 24，依次 `npm ci --no-audit --no-fund` → typecheck → build → test → `smoke:dist` → `npm pack --dry-run`（最后一步只打印将要发布的文件清单，**不发布**）。
-
-**发布**（[`.github/workflows/release.yml`](../.github/workflows/release.yml)）：
-
-- 推 `v*` 标签 → 真实发布 `npm publish --provenance --access public`。工作流会校验标签等于 `v` + `package.json.version`，不匹配即失败。
-- 或手动 `workflow_dispatch`，其 `dry_run` 输入**默认为 true** → 跑完整流水线但只执行 `npm publish --dry-run`。
-
-**认证走 npm trusted publishing（OIDC），不需要任何 secret**：与其它 `lolkda/dsh-*` 插件一致，工作流只声明 `id-token: write`，npm 用这个 OIDC 令牌换取一次性发布凭据，因此**没有 `NPM_TOKEN` 需要轮换**。一次性前提是在 npmjs.com 为该包登记 Trusted Publisher（Settings → Trusted Publisher）：
-
-| 字段 | 值 |
-|---|---|
-| Publisher | GitHub Actions |
-| Organization or user | `lolkda` |
-| Repository | `dsh-agent-team-model-pin` |
-| Workflow filename | `release.yml` |
-
-未登记时，工作流会在 `Publish` 步骤以 `npm error code E404 / 404 Not Found - PUT https://registry.npmjs.org/@lolkda%2fdsh-agent-team-model-pin` 失败——注意此时 **provenance 已经签名成功**，说明 OIDC 交换本身是通的，缺的只是这次登记。
-
-**打包**：`files` 只含 `dist`、`cordis.patch.yml`、`README.md`、`LICENSE`，而 `dist/` 被 `.gitignore` 忽略——这个组合本来会让干净检出打出的 tarball 缺少 `dist/`。现在由 **`prepare`**（`npm run build`）兜住：npm 在 `npm install` / `npm ci` / `npm pack` / `npm publish` 时会自动运行它，所以
-
-- `npm ci && rm -rf dist && npm pack --dry-run` → `prepare` 自动重建 `dist/`，tarball 仍是 **8 个文件**（含 4 个 `dist/**`）；
-- `npm publish` 另有 `prepublishOnly`（`check` + `smoke:dist`）把关。
-
-唯一会失败的情形是**连依赖都没装**就打包（例如刚 clone 完直接 `npm pack`）：此时 `prepare` 里的 `tsc` 不存在，`npm pack` 会**明确报错退出**（`sh: 1: tsc: not found`，exit 127），而不是静默产出空壳包。先 `npm ci` 或 `npm install` 即可。
-
----
-
-## 7. 已知限制
-
-- **不改 `list_agents` 的 `model` 列显示**。该列读 Agent 构造期 `options.model`，钉只作用于实际请求，所以 roster 里显示的仍是继承来的模型——"显示值"与"实际请求路由"可能不一致，以审计文件为准。
-- **运行期不校验、不回退 route**。校验只发生在 `/team-model` 设置那一刻；之后 provider/model 下架也不会自动失效。这是有意的：避免过期配置打死整个会话。
-- **单进程、共享 cwd**。不做跨进程协作，无 worktree / 文件锁；审计文件是进程内串行追加，多进程同时写同一路径没有互斥保证。
-- **slash 命令需人类在输入框触发**。模型侧无法敲 `/team-model`；自动化验证只能覆盖"命令注册成功 + 解析逻辑单测"。
-- **不管普通 `subagent` / `subagent_fork`** 的模型选择（它们另有 `agentOptions` / `modelSelectionSettings` 机制）。
-- **审计写入不阻塞请求**，极端情况下审计行可能略滞后于请求返回。
+- 仓库：<https://github.com/lolkda/dsh-agent-team-model-pin>
+- [CI](.github/workflows/ci.yml)：push / PR / 手动验证。
+- [发布工作流](.github/workflows/release.yml)：`v*` 标签或手动触发，手动默认 dry-run。真实发布使用 npm trusted publishing，仍需 npm 侧有效授权；**provenance 签名成功不能单独证明 npm 发布授权成功**。
+- 本轮仅修改、测试和安装 UI 升级，未触发 npm 发布。
+- MIT，见 [LICENSE](LICENSE)。
