@@ -6,7 +6,7 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "target": "es2023",
-    "lib": ["es2023"],
+    "lib": ["es2023", "dom"],
     "types": ["node"],
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,

@@ -270,7 +270,7 @@ test('1c settings 段落安装：命名空间 / entry / setSource 缺一不可�
   assert.equal(h.installCalls.length, 1, 'settings.installSection 应被调用一次');
   const call = h.installCalls[0];
   assert.equal(call.ns, SETTINGS_NS);
-  assert.deepEqual(call.entry, { sessions: {} });
+  assert.deepEqual(call.entry, { sessions: {}, defaults: {}, configuredSessions: {}, scope: 'teammates' });
   assert.equal(typeof call.hooks.setSource, 'function');
   assert.equal(typeof call.hooks.onChange, 'function');
 });

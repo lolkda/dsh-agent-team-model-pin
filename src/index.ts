@@ -2,22 +2,22 @@
  * Agent Team 模型钉插件（Host 半边）。
  *
  * 目标：把 Agent Team 队友实际发出的模型请求钉到指定 `provider / model / reasoningEffort`，
- * 可按 session 改写，改完下一个请求即生效。
+ * 按 session 选择，在下一次提示词组装时生效；本步重试复用已组装快照。
  *
  * 契约源：`docs/SPEC.md`（v1）。本文件只做装配：三层解析、命令解析、route 校验等纯逻辑
  * 全部来自 `./pin.ts`，此处不重复实现。
  *
- * 语言约束（SPEC 6）：仅可擦除语法；相对导入显式带 `.ts`；除 `@deepseek-ai/schemastery`
- * 外不引入任何外部包（Node 内置模块除外）。
+ * 仅使用可擦除 TypeScript 语法；相对导入带 `.ts`。官方
+ * @deepseek-ai/dsh-agent 选择器由宿主 runtime resolver 提供，不能另装核心运行时。
  *
- * @module @local/dsh-agent-team-model-pin
+ * @module @lolkda/dsh-agent-team-model-pin
  */
 import z from '@deepseek-ai/schemastery';
 import { appendFile, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  applyPin,
+  applyTeamPin,
   assertRouteSelectable,
   describePin,
   mutationFor,
@@ -26,6 +26,8 @@ import {
   resolvePin,
 } from './pin.ts';
 import type { CommandPlan, LlmLike, Pin, Scope } from './pin.ts';
+import type { Context } from '@deepseek-ai/cordis';
+import { installTeamModelSync } from './selection-sync.ts';
 
 /** settings 命名空间（SPEC 5.4）。 */
 const SETTINGS_NS = 'agent-team-model-pin';
@@ -47,6 +49,9 @@ type Role = 'lead' | 'teammate';
 /** Agent 的结构视图。 */
 interface AgentLike {
   id: string;
+  ctx?: Context;
+  session?: { requestHeader(): { config: LlmCallConfigLike } | undefined };
+  options?: Partial<LlmCallConfigLike>;
 }
 
 /** `ctx.agentTeams.tryMembership` 的返回值（SPEC 3）。 */
@@ -73,6 +78,10 @@ type PinDict = Record<string, Pin>;
 /** settings 段落值（SPEC 5.4）。 */
 interface SettingsValue {
   sessions?: PinDict;
+  /** Read-only composition metadata consumed from SettingsNamespaceView.base. */
+  defaults?: Pin;
+  configuredSessions?: PinDict;
+  scope?: Scope;
 }
 
 /** `setSource` 收到的同步读取 thunk。 */
@@ -157,14 +166,18 @@ interface AuditRecord {
 }
 
 /** settings 段落的 schema：`{ sessions: { "<sessionId>": { provider?, model?, reasoningEffort? } } }`。 */
+const PIN_SCHEMA = z.object({
+  provider: z.string(),
+  model: z.string(),
+  reasoningEffort: z.string(),
+  followLeader: z.boolean(),
+  modelDefault: z.boolean(),
+});
 const SETTINGS_SCHEMA = z.object({
-  sessions: z.dict(
-    z.object({
-      provider: z.string(),
-      model: z.string(),
-      reasoningEffort: z.string(),
-    }),
-  ),
+  sessions: z.dict(PIN_SCHEMA),
+  defaults: PIN_SCHEMA,
+  configuredSessions: z.dict(PIN_SCHEMA),
+  scope: z.string(),
 });
 
 /** 段落的 Composition 基准层（空 → 未设置任何运行期钉）。 */
@@ -225,7 +238,7 @@ export const inject = ['agentTeams', 'commands'];
 
 /**
  * 安装插件：归一化配置、安装 settings 段落、注册 `/team-model` 命令、
- * 注册唯一一个全局 `agent/request` 监听，并在命中时追加一行审计。
+ * 安装 Agent 作用域的官方选择器；仅无作用域旧驱动使用全局兼容监听，命中时追加审计。
  * @param ctx 插件上下文（`agentTeams` 与 `commands` 已注入）。
  * @param config 组合配置（任意形态；非法值只告警不抛）。
  */
@@ -303,7 +316,9 @@ export function apply(ctx: PluginCtx, config: unknown): void {
 
   ctx.inject(['settings'], (settingsCtx) => {
     try {
-      settingsCtx.settings.installSection(ctx, SETTINGS_NS, SETTINGS_SCHEMA, SETTINGS_ENTRY, {
+      settingsCtx.settings.installSection(ctx, SETTINGS_NS, SETTINGS_SCHEMA, {
+        ...SETTINGS_ENTRY, defaults: defaults ?? {}, configuredSessions: sessions, scope,
+      }, {
         setSource: (current: SettingsSource) => {
           liveSource = current;
         },
@@ -511,7 +526,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
             text: [
               `已设置本会话（${sessionId}）运行期钉：${describePin(pin)}`,
               `scope=${scope}${scope === DEFAULT_SCOPE && role === 'lead' ? '（只作用于队友，Lead 自身不受影响）' : ''}`,
-              '下一个发起的请求即生效；已发出的请求不被回改，已存在的队友无需重建。',
+              '下一次提示词组装时生效；本步重试沿用同一选择，已存在的队友无需重建。',
             ].join('\n'),
           };
         }
@@ -533,9 +548,35 @@ export function apply(ctx: PluginCtx, config: unknown): void {
     }),
   );
 
-  /* ---------- 5. 唯一一个全局 agent/request 监听 ---------- */
+  /* ---------- 5. Scoped prompt/request selection and legacy compatibility ---------- */
+
+  const synchronized = installTeamModelSync(ctx as unknown as Context, (agent) => {
+    try {
+      const membership = ctx.agentTeams.tryMembership(agent);
+      const sessionId = membership?.root.id ?? agent.id;
+      const pin = effectivePin(sessionId, membership?.role);
+      if (pin === undefined && membership?.role !== 'teammate') return undefined;
+      const root = membership?.role === 'teammate' ? membership.root : undefined;
+      const leader = root?.session?.requestHeader()?.config ?? root?.options;
+      return {
+        sessionId,
+        ...(membership?.role === undefined ? {} : { role: membership.role }),
+        ...(pin === undefined ? {} : { pin: { ...pin } }),
+        ...(leader === undefined ? {} : { leader: { ...leader } }),
+      };
+    } catch (error) {
+      warnOnce('request', 'agent-team-model-pin: 团队成员判定失败，本次不改写：' + errorText(error));
+      return undefined;
+    }
+  }, ({ agent, policy, from, to }) => {
+    audit({ at: new Date().toISOString(), sessionId: policy.sessionId, agentId: agent.id,
+      role: policy.role, from: routeOf(from), to: routeOf(to) });
+  });
 
   ctx.on('agent/request', async ({ agent }, next) => {
+    if (synchronized.has(agent)) return next();
+    // Older/nonstandard drivers without an Agent-scoped Context keep their
+    // request-only contract; the standard Loop is owned by the selector above.
     const config = await next();
     let membership: MembershipLike | undefined;
     let sessionId = agent.id;
@@ -548,10 +589,13 @@ export function apply(ctx: PluginCtx, config: unknown): void {
       warnOnce('request', `agent-team-model-pin: 团队成员判定失败，本次不改写：${errorText(error)}`);
       return config;
     }
-    if (pin === undefined) return config;
+    if (pin === undefined && membership?.role !== 'teammate') return config;
     let pinned: LlmCallConfigLike;
     try {
-      pinned = applyPin(config, pin);
+      const root = membership?.role === 'teammate' ? membership.root : undefined;
+      const leader = root?.session?.requestHeader()?.config ?? root?.options;
+      pinned = applyTeamPin(config, pin, leader);
+      if (pin === undefined && pinned === config) return config;
     } catch (error) {
       warnOnce('apply', `agent-team-model-pin: 钉应用失败，本次不改写：${errorText(error)}`);
       return config;

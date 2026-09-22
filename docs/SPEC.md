@@ -2,7 +2,7 @@
 
 > 本文件是本次开发的**唯一契约源**。`core-dev`、`plugin-dev`、`verifier` 的任务输入都是它。
 > 任何实现与本文冲突，以本文为准；需要改契约时先回报 Lead，由 Lead 更新本文后各方再动。
-> 冻结时间：本次开发开始前。版本：v1.3（源码 TS + 发布构建产物；v1.1/v1.2/v1.3 的裁定见第 9 节）。
+> 当前版本：v1.4（插件 1.1.0）。第 10 节记录用户批准的 Web 菜单扩展；如与前文历史契约有差异，以第 10 节为准。第 8 节是 1.0.0 的历史团队协作安排，本轮按用户要求由主 Agent 单独修改、验证，不启动队友。
 
 ## 1. 目标与成功标准
 
@@ -191,7 +191,7 @@ ctx.on('agent/request', async ({ agent }, next) => {
 
 ```yaml
 - id: agent-team-model-pin
-  name: '@local/dsh-agent-team-model-pin'
+  name: '@lolkda/dsh-agent-team-model-pin'
   config:
     scope: teammates        # teammates | members | all
     defaults: {}            # { provider?, model?, reasoningEffort? }
@@ -291,4 +291,70 @@ settings 命名空间 `agent-team-model-pin`：`{ sessions: { "<sessionId>": { p
 | 9.13 | 包名与发布形态（**v1.3 变更**） | 为发布到 npm，包名由 `@local/dsh-agent-team-model-pin` 改为 `@lolkda/dsh-agent-team-model-pin`（`@local` 无法发布）；`private` 移除；入口由 `src/index.ts` 改为构建产物 `dist/index.js`（见第 6 节）；`schemastery` 由 peerDependency 改为 dependency。行为契约（第 4–5 节）未变 |
 | 9.14 | `dist/index.d.ts` 保留 `'./pin.ts'` 说明符 | `rewriteRelativeImportExtensions` 只改写 emit 的 JS，类型导入在 `.d.ts` 中保持 `.ts`。**实测消费者可用**：以 `moduleResolution: nodenext` 编译一个只 `import { apply, name, inject }` 的消费者文件，无报错；且 `const n: number = name` 正确报 TS2322，证明类型真的解析到 `pin.d.ts` 而非退化为 `any`（TS 会剥离 `.ts` 扩展名后再查找）。故不为此改动源码说明符 |
 | 9.15 | 手工 `node_modules` 符号链接前提已取消 | 9.13 把 `schemastery` 改为 dependency 后，`npm install` 会在包内 `node_modules` 落地真实目录，`link:` 安装下的 realpath 上溯可直接解析；原符号链接属过渡期权宜，README 已随之更新 |
+
+## 10. Web 模型菜单扩展（v1.4，插件 1.1.0）
+
+用户已批准：在 composer 原模型按钮的同一菜单中增加 Team 模型与推理等级；本轮不使用 Agent Team。
+
+### 10.1 行为契约
+
+- 原「模型／推理等级」仍通过共享 `ModelDirectory.select` 修改主 Agent，不改其模型选择机制。
+- 同一菜单分隔线下提供「Team 模型／Team 推理等级」。模型按宿主目录中的 provider 分组顺序展示，并标明 provider；推理等级只来自所选模型公开的元数据。
+- Team 写入使用现有 settings 命名空间及 `sessions[LeadSessionId]` 路径；Team view 的 lead 成员确定作用键。保存采用所读 namespace revision 做 CAS；失败保留原显示状态并在菜单提示，不静默覆盖并发修改。
+- `followLeader: true` 是显式跟随选择，覆盖下层组合钉；允许同时只设置 Team 推理等级。跟随源是 Lead 当前已记录的请求路由，无请求头时回退其构造选项；Lead 尚未生效的下一请求选择仍遵循 DSH 原提示词组装边界。解除旧 Team 钉时不能继续残留旧路由。
+- `modelDefault: true` 显式移除继承的推理等级，让模型使用默认值；它优先于下层的 effort。固定选择一个 Team 模型时自动恢复该模式。
+- 两个标志只接受布尔 `true`，不进入 LLM 请求配置。原命令的 set/clear 语义保留；clear 仍只移除运行期层，而菜单的「跟随主 Agent」可覆盖组合层。
+- 默认 `scope=teammates` 下 Team 控件不影响 Lead；高级组合配置的 `members/all` 仍按原契约执行，不擅自改写用户配置。
+- 切换会话时卸载旧控件；旧异步结果不能写进新会话。保存期间禁用触发器，避免重载使保存结果丢失。只读、加载失败、不可用模型与不支持的 effort 均有明确状态。
+
+### 10.2 技术边界
+
+- 只替换 `conversation.input.model` 单插槽（**1.1.2 修正为 priority -100**），不用 DOM 注入，不改官方包、root 或 shipped preset。DSH 按 priority 升序选最低值；插件必须低于原生的 0。验收必须经真实 SlotCore 确认选中插件组件，卸载后恢复原生组件。
+- **1.1.3 修正**：使用宿主 React、React DOM、原生图标、locale 与主题变量，恢复原生 ModelSelect 的按钮与卡片尺寸、字体和配色；不用通用 Menu 的悬停子菜单。只显示一个锚定弹层，点击切换模型/effort 列表，有可点击返回按钮；列表内部滚动，按 visualViewport 限制宽高，支持键盘返回、关闭、焦点恢复与外部 pointerdown 关闭。
+- Client 明确注入 `remote`。测试中的服务必须由兄弟 provider fiber 提供，不能从根 context 提供而意外绕过 Cordis 的注入检查；正向加载和故意移除 remote 的反向用例都必须成立。
+- 不新增 Service、Remote 或工具；复用 `settings.describe/mutate`、`agentTeams.view` 与 `modelDirectories`。
+- settings 的不可变 `base` 增加 defaults/configuredSessions/scope 元数据供 UI 展示；用户层仍只写 sessions。UI 不把可修改的 user metadata 当成组合层权威值。
+- 源码仍为 TypeScript。构建增加 esbuild，将 Client 打包为 `window.__ModuleLoader__.load` factory；React 与原生组件均 external，不复制运行时。
+- **1.1.1 修正**：默认 bundle 必须挂载包根 `@lolkda/dsh-agent-team-model-pin`；`./client` 是浏览器工件。DSH 的 `exactPackageSpecifier` 明确跳过 `/web` 等包子路径，Host active 不能证明 Client 被发现。`./web` 仅保留为可选 Host 导出，不用于 Web 自动发现。`prepare` 仍确保干净打包包含完整 dist。
+- 插件包升级的重启要求与配置生效是两回事：安装器返回 `restart-required` 时不能声称新菜单已上线；加载后修改 Team 设置从后续请求生效。
+
+### 10.3 验收
+
+1.2.0 Host 同步修复：标准 Agent Loop 在组装时捕获模型选择，本步与重试共用快照；提示词和请求的 provider/model 一致。保留作用域、配置合并与审计，不改菜单、prompt-manager 或 agent.options。
+
+1. 同一 Menu 内存在主模型、主 effort、分隔线、Team 模型、Team effort 五行。
+2. 选择 Team 模型只调用 session-keyed settings.mutate，不调用主模型 select；选择主模型恰好相反。
+3. 不支持的 effort 在写入前被拒绝；模型默认清除旧 effort；显式跟随忽略静态钉并恢复 Lead 路由。
+4. CAS 拒绝不显示成功；保存期间不能触发竞争刷新，错误仍留在菜单可见。
+5. 既有 Host 行为回归通过；使用真实 Cordis（兄弟服务）、SlotCore 与 React DOM 验证注入、选中、点击、返回、焦点、保存失败和卸载。额外覆盖 320/375/768 宽度及缩小的 visualViewport 边界。jsdom 与纯几何测试不冒充真实手机/pad 的像素布局或浏览器截图。
+6. 激活后须在当前连接页面确认插槽占用与实际显示；若升级要求重启，则明确保留为待验证项。
+
+
+## 11. 1.2.0 Host 同步补充契约
+
+- 覆盖新建、恢复、已有 Agent、并发 Team、预览和卸载；使用实际 Cordis 作用域与 AgentLoop 验证，不能只测试假请求监听。
+- 对标准 Loop，R5 生效边界细化为下一次提示词组装；当前步的每次重试共用快照。无作用域旧驱动仍沿用请求级兼容。
+- SDK 依赖边界由下方第 12 节修正：仍复用官方 `@deepseek-ai/dsh-agent` 选择器，但不得随插件安装另一套核心运行时；验证版本 0.1.6-alpha.2。
+- Team 策略在普通选择器之后合成完整选择；只删除本步新生成且被覆盖的官方模型选择通知，不删用户输入或历史消息。
+- 未组装的标准请求、或后续路由与已组装选择不一致时失败，不发送错误身份说明。审计保持原有六字段。
+- 不改变 list_agents.model 的官方取值；它仍可能是构造/回退显示值。Host 升级需独立验证，旧 Client 版本标记不是后端激活证据。
+
+## 12. 1.2.2 冷启动与 SDK 单实例契约
+
+- 插件不得在 profile 安装第二套 `@deepseek-ai/dsh-*` / Cordis 核心运行时；这些包只用于开发和类型检查。
+- `@deepseek-ai/dsh-agent` 为 optional peer，版本合约固定于已验证的 `0.1.6-alpha.2`。运行时仍使用公开 `installModelSelection()`，由 DSH profile resolver 回退到部署实例，不硬编码宿主路径、不使用未导出内部模块。
+- 生产依赖保留 schema 库；不把 `autoInstallPeers: false` 或离开 DSH 启动器的裸 Node import 失败误判为需要再安装完整 SDK。
+- 冷启动验收必须穿过真实 Loader/runtime resolver/AgentPresets 的 persona 挂载，并确认插件 active、选择器模块身份一致、global/两会话的 persona 隔离、释放一个会话后另一个仍正常。
+- 修复包需在独立 DSH 调试进程进一步验证；调试使用独立 profile、存储和端口，不能替换当前用户服务。普通 Agent 会话测试不等于调用真实供应商或创建实际 Team 队友。
+- 恢复 1.2.1 故障时优先用管理器移除旧 bundle 的依赖闭包后再安装修复版；只禁用插件行不足以证明核心依赖已清理。不得删除用户 settings、会话或官方 persona。
+
+## 13. 1.2.3 Client 冷目录与真实渲染契约
+
+- Client 必须声明 `remote.session`：原生 `ModelDirectoryResolver.directoryFor()` 在首次创建目录时会通过调用上下文读取此命名空间，不能仅声明 `remote`、`remote.settings`、`remote.agentTeams`。
+- 保留原有 model 单插槽与 priority -100。组件不能因为缺少依赖而被 Slot renderer 标记 abdicated、回退到原生两项菜单。不得靠调优先级、关闭错误边界或反复重新注册掩盖错误。
+- 保留主模型、主推理等级、分隔线、Team 模型、Team 推理等级。Team 设置仍以 LeadSessionId + revision 写入原 settings 命名空间，无新增字段或迁移。
+- 原生目录加载失败由其 store 发布可见错误；调用方必须消费 load Promise 的 rejection，不能产生未处理拒绝。普通 settings RPC 失败/只读/CAS 冲突在组件内呈现，不让整个控件退出。
+- 测试需使用真实 Cordis、原生 ModelDirectoryResolver、SlotRegistry/renderer 和原生回退组件；传输、保留会话数据和图标可以是明确的外部 IO/视觉夹具。必须覆盖冷目录、热缓存后切换新会话、缺依赖退位、四行菜单、保存隔离、失败呈现与卸载恢复。
+- Client registrant 和 DOM 版本标记更新为 1.2.3。当前页面必须验证渲染后/打开菜单后仍正常，不能把注册瞬间的 active 当作可见菜单验收。
+- Host 同步算法、1.2.2 SDK optional-peer 边界、已有会话和 settings 保持不变。不得自动重启当前 DSH；安装结果和浏览器实际新产物分别确认。
 

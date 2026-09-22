@@ -2,7 +2,15 @@
 // Zero imports, no filesystem, no network, erasable TypeScript syntax only.
 
 export type Scope = 'teammates' | 'members' | 'all';
-export type Pin = { provider?: string; model?: string; reasoningEffort?: string };
+export type Pin = {
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+  /** Explicit UI choice: ignore static pins and follow the Lead route. */
+  followLeader?: boolean;
+  /** Explicit UI choice: remove inherited effort and use the model default. */
+  modelDefault?: boolean;
+};
 
 /** Trim a raw field; blank / non-string values count as "not set". */
 function asField(raw: unknown): string | undefined {
@@ -18,13 +26,17 @@ export function normalizePin(raw: unknown): Pin | undefined {
   const provider = asField(src.provider);
   const model = asField(src.model);
   const reasoningEffort = asField(src.reasoningEffort);
-  if (provider === undefined && model === undefined && reasoningEffort === undefined) {
+  const followLeader = src.followLeader === true;
+  const modelDefault = src.modelDefault === true;
+  if (provider === undefined && model === undefined && reasoningEffort === undefined && !followLeader && !modelDefault) {
     return undefined;
   }
   const out: Pin = {};
-  if (provider !== undefined) out.provider = provider;
-  if (model !== undefined) out.model = model;
-  if (reasoningEffort !== undefined) out.reasoningEffort = reasoningEffort;
+  if (provider !== undefined && !followLeader) out.provider = provider;
+  if (model !== undefined && !followLeader) out.model = model;
+  if (reasoningEffort !== undefined && !modelDefault) out.reasoningEffort = reasoningEffort;
+  if (followLeader) out.followLeader = true;
+  if (modelDefault) out.modelDefault = true;
   return out;
 }
 
@@ -37,12 +49,14 @@ function layerFor(layers: unknown, sessionId: string): Pin | undefined {
 
 function mergePin(lower: Pin | undefined, upper: Pin | undefined): Pin | undefined {
   if (upper === undefined) return lower;
+  if (upper.followLeader) return upper;
   if (lower === undefined) return upper;
   const merged: Pin = {
     provider: upper.provider !== undefined ? upper.provider : lower.provider,
     model: upper.model !== undefined ? upper.model : lower.model,
     reasoningEffort:
       upper.reasoningEffort !== undefined ? upper.reasoningEffort : lower.reasoningEffort,
+    ...(upper.modelDefault ? { modelDefault: true } : {}),
   };
   return normalizePin(merged);
 }
@@ -82,12 +96,23 @@ export function applyPin<T extends { provider: string; model: string; reasoningE
   const routeChanged = normalized.provider !== undefined || normalized.model !== undefined;
   if (normalized.provider !== undefined) next.provider = normalized.provider;
   if (normalized.model !== undefined) next.model = normalized.model;
-  if (normalized.reasoningEffort !== undefined) {
+  if (normalized.modelDefault) {
+    delete next.reasoningEffort;
+  } else if (normalized.reasoningEffort !== undefined) {
     next.reasoningEffort = normalized.reasoningEffort;
   } else if (routeChanged) {
     delete next.reasoningEffort;
   }
   return next;
+}
+
+/** Restore the live Lead route when following, including after an old pin. */
+export function applyTeamPin<T extends { provider: string; model: string; reasoningEffort?: string }>(
+  config: T, pin: Pin | undefined, leader?: Pin,
+): T {
+  const follows = pin === undefined || pin.followLeader === true;
+  const base = follows && leader?.provider && leader.model ? applyPin(config, leader) : config;
+  return pin === undefined ? base : applyPin(base, pin);
 }
 
 export type CommandPlan =
@@ -142,6 +167,8 @@ export function describePin(pin: Pin | undefined): string {
   const normalized = normalizePin(pin);
   if (normalized === undefined) return '当前会话未设置模型钉（沿用继承路由）';
   const parts: string[] = [];
+  if (normalized.followLeader) parts.push('模型=跟随主 Agent');
+  if (normalized.modelDefault) parts.push('reasoningEffort=模型默认');
   if (normalized.provider !== undefined) parts.push(`provider=${normalized.provider}`);
   if (normalized.model !== undefined) parts.push(`model=${normalized.model}`);
   if (normalized.reasoningEffort !== undefined) {

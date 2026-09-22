@@ -1,7 +1,7 @@
 {
   "name": "@lolkda/dsh-agent-team-model-pin",
-  "version": "1.0.0",
-  "description": "DSH Host plugin: pin Agent Team teammate model requests to a chosen provider / model / reasoningEffort, editable per session",
+  "version": "1.2.3",
+  "description": "DSH Host/Web plugin: choose per-session Agent Team models and reasoning effort in the composer",
   "keywords": [
     "dsh",
     "deepseek-harness",
@@ -23,6 +23,14 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./web": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/web.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -33,19 +41,49 @@
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "test": "node --test tests/*.test.mjs",
     "check": "npm run typecheck && npm run build && npm test",
-    "smoke:dist": "node -e \"import('./dist/index.js').then(m=>{if(m.name!=='agent-team-model-pin'||typeof m.apply!=='function')throw new Error('dist entry smoke failed');console.log('dist entry OK:',m.name,JSON.stringify(m.inject))})\"",
+    "smoke:dist": "node -e \"Promise.all([import('./dist/index.js'),import('./dist/web.js')]).then(ms=>{for(const m of ms){if(m.name!=='agent-team-model-pin'||typeof m.apply!=='function')throw new Error('dist entry smoke failed')}console.log('Host and Web entries OK')})\" && node --check dist/client.js",
     "prepare": "npm run build",
     "prepublishOnly": "npm run check && npm run smoke:dist"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "3.18.2"
   },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent": "0.1.6-alpha.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-agent-loop": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-client-store": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.6-alpha.2",
+    "@deepseek-ai/dsh-invariants": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-scope": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-session": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-session-projection": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-util-values": "0.1.6-alpha.2",
     "@types/node": "^26.6.2",
-    "typescript": "^7.0.2"
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
+    "esbuild": "^0.28.2",
+    "immer": "10.1.1",
+    "jsdom": "^30.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-test-renderer": "^18.3.1",
+    "typescript": "^7.0.2",
+    "zustand": "4.4.7"
   },
   "license": "MIT",
   "author": "lolkda",
@@ -64,6 +102,21 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-experimental-client-ui-agent-team"
+      ],
+      "external": [
+        "react-dom",
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ]
     }
   }
 }
