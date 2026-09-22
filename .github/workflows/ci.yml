@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # The DSH runtime the integration suites resolve. It matches the
+  # @deepseek-ai/dsh-agent devDependency and the peer range in package.json.
+  DSH_RUNTIME_VERSION: 0.1.6-alpha.2
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -19,9 +24,26 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+          cache: npm
 
       - name: Install
         run: npm ci --no-audit --no-fund
+
+      # The native Client, cold start and Web restart suites skip themselves
+      # when the machine has no DSH installation, and `node --test` still exits
+      # 0 — a green job that never ran them. Install the runtime, pin
+      # DSH_TEST_INSTALL_ROOT so discovery cannot depend on PATH, and refuse to
+      # continue when the installation is not actually there.
+      - name: Install the DSH runtime the integration suites need
+        run: |
+          set -euo pipefail
+          npm install --global "@deepseek-ai/dsh@${DSH_RUNTIME_VERSION}"
+          root="$(npm root -g)/@deepseek-ai/dsh"
+          test -f "${root}/lib/profile-boot.js" || {
+            echo "::error::no DSH runtime at ${root}; refusing to run a gate that would silently skip the integration suites"
+            exit 1
+          }
+          echo "DSH_TEST_INSTALL_ROOT=${root}" >> "$GITHUB_ENV"
 
       - name: Typecheck
         run: npm run typecheck
@@ -29,10 +51,17 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Test
-        run: npm test
+      - name: Test, requiring the integration suites to run
+        run: |
+          set -euo pipefail
+          npm run --silent test:tap | tee /tmp/test.tap
+          skipped="$(sed -n 's/^# skipped \([0-9][0-9]*\)$/\1/p' /tmp/test.tap | tail -1)"
+          if [ "${skipped:-missing}" != "0" ]; then
+            echo "::error::${skipped:-an unknown number of} test(s) skipped; the DSH-backed integration suites must run in CI"
+            exit 1
+          fi
 
-      - name: Smoke the built entry
+      - name: Smoke the built entries
         run: npm run smoke:dist
 
       - name: Show what would be published

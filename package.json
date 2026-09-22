@@ -43,6 +43,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.build.json && node scripts/build-client.mjs",
     "test": "node --test tests/*.test.mjs",
+    "test:tap": "node --test --test-reporter=tap tests/*.test.mjs",
     "check": "npm run typecheck && npm run build && npm test",
     "smoke:dist": "node -e \"Promise.all([import('./dist/index.js'),import('./dist/web.js')]).then(ms=>{for(const m of ms){if(m.name!=='agent-team-model-pin'||typeof m.apply!=='function')throw new Error('dist entry smoke failed')}console.log('Host and Web entries OK')})\" && node --check dist/client.js",
     "prepare": "npm run build",

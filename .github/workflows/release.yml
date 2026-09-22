@@ -1,20 +1,30 @@
 name: release
 
-# Publishes to npm with a provenance attestation, the same way as the other
-# lolkda/dsh-* plugins: npm trusted publishing (OIDC) — there is deliberately
-# no NPM_TOKEN secret to rotate. `id-token: write` is what npm exchanges for a
-# short-lived publish credential.
+# Publishes @lolkda/dsh-agent-team-model-pin to npm.
 #
-# Triggers:
-#   * push a tag matching v<package.json version> -> real publish
-#   * workflow_dispatch with dry_run=true (default) -> full pipeline, no publish
+# Two credentials are supported, and the workflow uses whichever the
+# repository actually has:
 #
-# One-time prerequisite on npmjs.com: add this repository as a Trusted
-# Publisher for the package (Settings -> Trusted Publisher):
+#   * NPM_TOKEN secret -> a granular access token with publish rights. This is
+#     the only path that can perform the FIRST publish: npm only accepts a
+#     trusted publisher for a package that already exists on the registry
+#     ("Package must exist", npm trust prerequisites), so OIDC alone cannot
+#     create the package.
+#   * no secret        -> npm trusted publishing (OIDC). Once the package
+#     exists and this repository is registered as its trusted publisher,
+#     releases need no long-lived token.
+#
+# One-time setup for the OIDC path, on npmjs.com -> the package -> Settings ->
+# Trusted Publisher:
 #   publisher:            GitHub Actions
 #   organization or user: lolkda
 #   repository:           dsh-agent-team-model-pin
 #   workflow filename:    release.yml
+#
+# Triggers:
+#   * push a tag matching v<package.json version>    -> real publish
+#   * workflow_dispatch with dry_run=true (default)  -> full pipeline, no publish
+#   * workflow_dispatch with dry_run=false           -> real publish
 
 on:
   push:
@@ -30,12 +40,17 @@ on:
 permissions:
   contents: read
 
+env:
+  # The DSH runtime the integration suites resolve. It matches the
+  # @deepseek-ai/dsh-agent devDependency and the peer range in package.json.
+  DSH_RUNTIME_VERSION: 0.1.6-alpha.2
+
 jobs:
-  publish:
+  verify:
+    name: Verify the release
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write # npm trusted publishing + provenance; no NPM_TOKEN needed
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
 
@@ -43,9 +58,25 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+          cache: npm
 
       - name: Install
         run: npm ci --no-audit --no-fund
+
+      # The native Client, cold start and Web restart suites skip themselves
+      # when the machine has no DSH installation, and `node --test` still exits
+      # 0. A release gate that skipped them would prove almost nothing, so
+      # install the runtime and pin DSH_TEST_INSTALL_ROOT explicitly.
+      - name: Install the DSH runtime the integration suites need
+        run: |
+          set -euo pipefail
+          npm install --global "@deepseek-ai/dsh@${DSH_RUNTIME_VERSION}"
+          root="$(npm root -g)/@deepseek-ai/dsh"
+          test -f "${root}/lib/profile-boot.js" || {
+            echo "::error::no DSH runtime at ${root}; refusing to publish behind a gate that would silently skip the integration suites"
+            exit 1
+          }
+          echo "DSH_TEST_INSTALL_ROOT=${root}" >> "$GITHUB_ENV"
 
       - name: Typecheck
         run: npm run typecheck
@@ -53,28 +84,89 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Test
-        run: npm test
+      - name: Test, requiring the integration suites to run
+        run: |
+          set -euo pipefail
+          npm run --silent test:tap | tee /tmp/test.tap
+          skipped="$(sed -n 's/^# skipped \([0-9][0-9]*\)$/\1/p' /tmp/test.tap | tail -1)"
+          if [ "${skipped:-missing}" != "0" ]; then
+            echo "::error::${skipped:-an unknown number of} test(s) skipped; refusing to publish behind a gate that did not run the DSH-backed integration suites"
+            exit 1
+          fi
 
-      - name: Smoke the built entry
+      - name: Smoke the built entries
         run: npm run smoke:dist
 
       - name: The tag must name the version being published
-        if: github.ref_type == 'tag'
+        id: version
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME#v}"
-          pkg="$(node -p 'require("./package.json").version')"
-          if [ "$tag" != "$pkg" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${pkg}"
+          version="$(node -p 'require("./package.json").version')"
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version v${version}"
             exit 1
           fi
-          echo "publishing ${pkg}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release version ${version}"
 
+      - name: Show what would be published
+        run: npm pack --dry-run
+
+  publish:
+    name: Publish to npm
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC trusted publishing + provenance
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Choose the publish credential
+        id: auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+            echo "publishing with the NPM_TOKEN repository secret"
+          else
+            echo "mode=oidc" >> "$GITHUB_OUTPUT"
+            echo "publishing with npm trusted publishing (OIDC)"
+          fi
+
+      # A manual run on a branch exercises packaging without publishing.
       - name: Publish (dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        run: npm publish --dry-run
+        run: npm publish --dry-run --access public
 
-      - name: Publish
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
-        run: npm publish --provenance --access public
+      - name: Publish with the repository token
+        if: steps.auth.outputs.mode == 'token' && (github.ref_type == 'tag' || inputs.dry_run == false)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Publish with OIDC trusted publishing
+        if: steps.auth.outputs.mode == 'oidc' && (github.ref_type == 'tag' || inputs.dry_run == false)
+        run: |
+          set -euo pipefail
+          if npm publish --provenance --access public; then
+            exit 0
+          fi
+          # A provenance signature proves the build, not that npm authorized
+          # the upload; an unauthorized OIDC publish fails as a bare 404.
+          echo "::error::npm rejected the OIDC publish. Check, in order:"
+          echo "::error::  1. the package exists on npm — the first publish needs NPM_TOKEN or a local npm publish, because npm only accepts a trusted publisher for a package that already exists"
+          echo "::error::  2. npmjs.com -> the package -> Settings -> Trusted Publisher is publisher=GitHub Actions, user=lolkda, repository=dsh-agent-team-model-pin, workflow=release.yml"
+          echo "::error::  3. package.json repository.url matches this repository exactly"
+          exit 1

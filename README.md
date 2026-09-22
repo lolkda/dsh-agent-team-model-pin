@@ -158,6 +158,7 @@ UI 复用 `settings.describe/mutate`，组合元数据只取不可变 `base`，�
 | `npm run typecheck` | 严格 TypeScript 检查 |
 | `npm run build` | tsc 生成声明与 JS，esbuild 生成 Web Host 入口和浏览器 lazy factory |
 | `npm test` | 原有回归、UI 策略、Host 装配、React 组件测试 |
+| `npm run test:tap` | 同一套测试，TAP 输出，供 CI 判定是否有用例被跳过 |
 | `npm run check` | typecheck → build → test |
 | `npm run smoke:dist` | 检查两个 Host 入口与浏览器脚本语法 |
 | `npm pack --dry-run` | `prepare` 自动构建后核对发布文件 |
@@ -166,8 +167,40 @@ UI 复用 `settings.describe/mutate`，组合元数据只取不可变 `base`，�
 
 `dist/` 不提交进 Git，但 `prepare` 自动构建。npm 包只含 `dist`、bundle patch、README、LICENSE 和 package metadata，不含源代码、测试或开发依赖。
 
-- 仓库：<https://github.com/lolkda/dsh-agent-team-model-pin>
-- [CI](.github/workflows/ci.yml)：push / PR / 手动验证。
-- [发布工作流](.github/workflows/release.yml)：`v*` 标签或手动触发，手动默认 dry-run。真实发布使用 npm trusted publishing，仍需 npm 侧有效授权；**provenance 签名成功不能单独证明 npm 发布授权成功**。
-- 本轮仅修改、测试和安装 UI 升级，未触发 npm 发布。
+`artifacts/` 是本地验证证据，**不进 Git**：其中的 Web 重启探针会记录带会话 token 的 `dsh web` 入口 URL。
+
+### 集成测试不能被静默跳过
+
+`native-client`、`cold-start`、`web-restart` 三个套件在机器上没有 DSH 安装时会 `skip`，而 `node --test` 仍然退出 0。CI 与发布工作流因此都会先安装 `@deepseek-ai/dsh`、显式固定 `DSH_TEST_INSTALL_ROOT`，再用 TAP 摘要断言 `# skipped 0`；跳过即为失败。本地想跑完整门禁：
+
+```bash
+npm install --global @deepseek-ai/dsh@0.1.6-alpha.2
+export DSH_TEST_INSTALL_ROOT="$(npm root -g)/@deepseek-ai/dsh"
+npm run check
+```
+
+### 发布
+
+- 仓库：<https://github.com/lolkda/dsh-agent-team-model-pin>（public）
+- [CI](.github/workflows/ci.yml)：push / PR / 手动验证，含上面的跳过守卫。
+- [发布工作流](.github/workflows/release.yml)：`verify` 通过后才 `publish`；`v*` 标签推送即真实发布，手动触发默认 dry-run（`dry_run=false` 才真实发布）。
+
+工作流按仓库实际持有的凭据二选一：
+
+| 凭据 | 行为 | 适用阶段 |
+|---|---|---|
+| 仓库 secret `NPM_TOKEN` | `npm publish` 使用 granular access token | **首次发布唯一可行路径**，也是回退路径 |
+| 无 secret | `npm publish --provenance`，走 npm trusted publishing（OIDC） | 包已存在且已登记 trusted publisher 之后 |
+
+首次发布必须用 token（或本地 `npm publish`）：npm 只允许为**已存在于 registry 的包**配置 trusted publisher，所以 OIDC 无法创建包。首次发布后在 npmjs.com 的该包 Settings → Trusted Publisher 登记：
+
+```
+publisher:            GitHub Actions
+organization or user: lolkda
+repository:           dsh-agent-team-model-pin
+workflow filename:    release.yml
+```
+
+登记后即可删掉 `NPM_TOKEN`，发布不再依赖长期令牌。未登记时 OIDC 发布会以裸 404 失败——**provenance 签名成功只证明构建来源，不证明 npm 授权了这次上传**；工作流会捕获该失败并打印上面这份排查清单。
+
 - MIT，见 [LICENSE](LICENSE)。
