@@ -6,3 +6,9 @@ npm-debug.log*
 .idea/
 .vscode/
 *.tgz
+
+# Local verification evidence. It is kept out of Git on purpose: the Web
+# restart probes capture the `dsh web` entry URL, which carries a live
+# session token, and the files are reproducible with `npm run check` plus
+# the probes under tests/fixtures/.
+artifacts/
