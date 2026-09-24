@@ -232,7 +232,8 @@ settings 命名空间 `agent-team-model-pin`：`{ sessions: { "<sessionId>": { p
 - 打包契约：tarball 必须含 `dist/index.js`、`dist/index.d.ts`、`dist/web.js`、`dist/client.js`、`cordis.patch.yml`、`README.md`、`LICENSE`，且不得含 `src/`、`tests/`、`docs/`。
 - dist-tag：正式版 → `latest`；预发布 → `next`。判定由 `scripts/release-plan.mjs` 的纯函数 `planRelease` 完成，回归在 `tests/release.test.mjs`。registry 读取失败但不是 404 时必须中止，不得当作「尚未发布」。
 - 凭据：只用 **npm trusted publishing（OIDC）** + `npm publish --provenance`，仓库不保存长期令牌，workflow 不得读取任何 secret。本账号写操作强制 2FA，token 发布会被 npm 拒绝（`EOTP`），`npm publish` / `npm dist-tag add` / `npm trust` 实测都要求 OTP，所以不存在 token 回退路径。
-- 两个 npm 侧前提只能由维护者带 2FA 在 CI 之外一次性完成：① 包必须已存在（`npm trust` 的 Prerequisites 明确要求 “Package must exist”，新包 staged publish 同样 404），首次发布手工上传门禁产出的 tarball 并补 `latest`；② `npm trust github <pkg> --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish` 登记本 workflow。
+- 两个 npm 侧前提只能由维护者带 2FA 在 CI 之外一次性完成（本仓库已完成，此后 `v*` 标签即自动发布）：① 包必须已存在（`npm trust` 的 Prerequisites 明确要求 “Package must exist”，新包 staged publish 同样 404），首个版本手工上传门禁产出的 tarball 并补 `latest`；② `npm trust github <pkg> --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish` 登记本 workflow。带 2FA 的命令必须在 pty 里运行且带 `--browser=false`，否则 npm 的 `otplease` 会因非 TTY 直接抛错、走不到浏览器授权分支。
+- dist-tags 必须从 `/-/package/<pkg>/dist-tags` 读（`scripts/release-plan.mjs` 直接发 HTTP），不能用 `npm view` 读 packument：发布后 CDN 边缘仍可能对 packument 回过期 404，而 dist-tags 已经是新值；把过期 404 当成「从未发布」会拦住刚刚成功的发布。404 需重试后才判定为「包不存在」，非 404 失败一律中止。
 - `publish` 在上传**之前**做两个前置检查并在不满足时中止：包不存在（`first_publish`）→ 打印上面那份 bootstrap 步骤；预发布但 registry 无 `latest`（`latest_missing`）→ 拒绝发布，因为 trusted publishing 覆盖不了 `npm dist-tag add`，发出去就没人能按包名安装。
 
 

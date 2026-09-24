@@ -130,6 +130,16 @@ test('release: every plan output the workflow reads is one the plan script write
   }
 });
 
+test('release: the post-publish check reads endpoints that answer fresh', () => {
+  const publishJob = release.slice(release.indexOf('\n  publish:'));
+  // Comments are allowed to explain the rule; only command lines can break it.
+  const commands = publishJob.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
+  assert.ok(!/npm view/.test(commands),
+    'npm view reads the full package document, which answered a stale 404 for minutes after the first publish');
+  assert.ok(/-\/package\/\$\{escaped\}\/dist-tags/.test(publishJob),
+    'the tag check must read the endpoint that is fresh while the package document lags');
+});
+
 test('release: a tag must name the version in package.json', () => {
   assert.ok(/does not match package\.json version/.test(release));
 });
@@ -170,17 +180,27 @@ test('release-plan: the plan describes the version package.json declares', () =>
   assert.ok(plan.distTag === 'next' || plan.distTag === 'latest');
 });
 
-test('release-plan CLI: a package the registry does not have is a first publish under next', async (t) => {
+// The CLI runs against the real package.json, so these expectations follow the
+// shape of the version the repository is on. The version→tag mapping itself is
+// covered by the planRelease cases above, which is where a release that changes
+// the shape belongs; hardcoding `next` here only made the suite go red on the
+// day the version stopped being a prerelease.
+const manifestPrerelease = pkg.version.includes('-');
+const manifestTag = manifestPrerelease ? 'next' : 'latest';
+
+test('release-plan CLI: a package the registry does not have is a first publish', async (t) => {
   const { registry, requests } = await withRegistry(t, [{ status: 404, body: { error: 'Not found' } }]);
   const { out, outputs, error } = await runCli({ registry }, t);
   assert.equal(error, undefined, 'a missing package is the expected first-release state, not a failure');
   const plan = JSON.parse(out);
   assert.equal(plan.name, pkg.name);
   assert.equal(plan.version, pkg.version);
-  assert.equal(plan.distTag, 'next');
+  assert.equal(plan.distTag, manifestTag);
   assert.equal(plan.firstPublish, true);
-  assert.match(outputs, /^dist_tag=next$/m);
-  assert.match(outputs, /^latest_missing=true$/m);
+  assert.match(outputs, new RegExp(`^dist_tag=${manifestTag}$`, 'm'));
+  assert.match(outputs, new RegExp(`^latest_missing=${manifestPrerelease}$`, 'm'));
+  assert.equal(plan.latestMissing, manifestPrerelease,
+    'only a prerelease would leave the bare package name uninstallable');
   assert.equal(requests[0], `/-/package/${pkg.name.replace('/', '%2f')}/dist-tags`,
     'the plan must read the package-scoped dist-tags endpoint, whose answer is the one the publish path itself uses');
 });
@@ -205,8 +225,8 @@ test('release-plan CLI: live dist-tags decide the tag and the latest repair', as
   const { registry } = await withRegistry(t, [{ status: 200, body: { latest: '1.2.3', next: '1.2.4-rc.1' } }]);
   const { out, outputs } = await runCli({ registry }, t);
   const plan = JSON.parse(out);
-  assert.equal(plan.distTag, 'next');
-  assert.equal(plan.latestMissing, false);
+  assert.equal(plan.distTag, manifestTag);
+  assert.equal(plan.latestMissing, false, 'a live latest tag means the bare package name already installs');
   assert.equal(plan.firstPublish, false);
   assert.deepEqual(plan.existingTags, { latest: '1.2.3', next: '1.2.4-rc.1' });
   assert.match(outputs, /^latest_missing=false$/m);

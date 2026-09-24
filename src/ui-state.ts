@@ -10,7 +10,7 @@ export const SETTINGS_NS = 'agent-team-model-pin';
  * bump for a release, and `tests/client.test.mjs` asserts it matches
  * `package.json` so the two cannot drift.
  */
-export const CLIENT_VERSION = '1.3.0-rc.1';
+export const CLIENT_VERSION = '1.3.0';
 export interface Selection { provider: string; model: string; reasoningEffort?: string }
 export interface ModelInfo {
   id: string; name: string; description?: string;

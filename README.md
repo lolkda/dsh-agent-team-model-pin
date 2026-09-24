@@ -6,7 +6,7 @@ DSH Agent Team 模型选择插件。**1.1.0 起直接在输入框原来的模型
 
 ## DSH 0.1.7-rc.1 适配版
 
-本地修复版为 `1.3.0-rc.1`。不修改 DSH 核心或内置 preset，不依赖版本豁免，也不在 Profile 安装第二份核心 SDK。
+当前版本为 `1.3.0`。不修改 DSH 核心或内置 preset，不依赖版本豁免，也不在 Profile 安装第二份核心 SDK。
 
 - Host 导出 `Config`，`scope/defaults/sessions` 使用原生 volatile 引用；设置写入当前 Profile patch，旧 `agent-team-model-pin:` 段由 DSH 自动导入。
 - Client 用 `sessions` 的持久父地址确定 Lead 会话，不再访问已删除的 `remote.agentTeams`；使用新版 `OutlineRegular` 图标。
@@ -213,7 +213,7 @@ npm run check
 
 不能改成用 token 发布：本账号开启了「写操作强制 2FA」，CI 里用 granular token 发布会直接被 npm 拒绝（`EOTP: This operation requires a one-time password`），而 npm 正在撤回「可绕过 2FA 的 token 用于直接发布」这条路；`npm publish`、`npm dist-tag add`、`npm trust` 三个动作实测都要求 OTP。OIDC 是唯一可行的 CI 发布方式。
 
-两个 npm 侧前提，都只需要做一次，且都必须由你带 2FA 在 CI 之外完成：
+两个 npm 侧前提，都只需要做一次，且都必须由维护者带 2FA 在 CI 之外完成。**本仓库两项都已完成**（首个版本 `1.3.0-rc.1` 手工上传，trust 已登记为 `github / lolkda/dsh-agent-team-model-pin / release.yml`，权限 `publish, stage publish`），因此现在推送 `v*` 标签即自动发布。下面记录当初是怎么做的，供新包复用：
 
 1. **包必须已存在**。npm 只允许给**已存在的包**登记 trusted publisher（`npm trust` 的 Prerequisites 原文是 “Package must exist”），新包做 staged publish 也会返回 404。所以首次发布要手工上传一次本工作流产出的、已通过门禁的 tarball：
 

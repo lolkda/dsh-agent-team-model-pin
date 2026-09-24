@@ -289,16 +289,39 @@ jobs:
           set -euo pipefail
           name="${{ steps.plan.outputs.name }}"
           version="${{ steps.plan.outputs.version }}"
-          published=""
+          registry="https://registry.npmjs.org/"
+          escaped="${name/\//%2f}"
+
+          # Not `npm view`: that reads the full package document, which served a
+          # stale 404 at the CDN edge for minutes after the first publish. The
+          # version document and the dist-tags endpoint answer fresh, and they are
+          # the two facts worth checking — this version is served, and the tag the
+          # plan chose points at it.
+          document=/tmp/published-version.json
           for attempt in 1 2 3 4 5; do
-            published="$(npm view "${name}@${version}" version || true)"
-            [ "${published}" = "${version}" ] && break
-            echo "attempt ${attempt}: the registry still reports '${published}', retrying"
+            if curl -sf "${registry}${escaped}/${version}" -o "${document}"; then
+              break
+            fi
+            echo "attempt ${attempt}: ${registry}${escaped}/${version} is not served yet, retrying"
             sleep 5
           done
-          if [ "${published}" != "${version}" ]; then
-            echo "::error::${name}@${version} was published but the registry reports '${published}'"
+          if ! test -s "${document}"; then
+            echo "::error::${name}@${version} was published but ${registry}${escaped}/${version} still answers nothing"
             exit 1
           fi
-          npm dist-tag ls "${name}"
+          served="$(node -p 'require("/tmp/published-version.json").version')"
+          if [ "${served}" != "${version}" ]; then
+            echo "::error::the registry serves ${served} where ${version} was published"
+            exit 1
+          fi
+          tagged="$(TAGS="$(curl -sf "${registry}-/package/${escaped}/dist-tags")" \
+            TAG="${{ steps.plan.outputs.dist_tag }}" node -e '
+              const tags = JSON.parse(process.env.TAGS)
+              process.stdout.write(String(tags[process.env.TAG] ?? ""))
+            ')"
+          echo "dist-tags: $(curl -sf "${registry}-/package/${escaped}/dist-tags")"
+          if [ "${tagged}" != "${version}" ]; then
+            echo "::error::${name}@${version} was published under ${{ steps.plan.outputs.dist_tag }}, but that tag points at '${tagged}'"
+            exit 1
+          fi
           echo "published ${name}@${version} under ${{ steps.plan.outputs.dist_tag }}"
