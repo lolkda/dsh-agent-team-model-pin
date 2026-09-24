@@ -78,6 +78,14 @@ test('release: the publish job publishes the tarball the verify job built', () =
   const commands = publishJob.split('\n').filter((line) => !/^\s*#/.test(line)).join('\n');
   assert.ok(!/npm (ci|run build)\b/.test(commands),
     'the publish job must not rebuild: the bytes that passed the gate are the bytes that ship');
+  assert.ok(/tarball="\$\(realpath /.test(publishJob),
+    'the tarball path must be absolute: npm reads a two-segment relative path as the owner/repo git shorthand and runs `git ls-remote` instead of publishing the file');
+  const specs = [...release.matchAll(/npm publish "([^"]+)"/g)].map((match) => match[1]);
+  assert.equal(specs.length, 3, 'each publish path (dry run, token, OIDC) must name its tarball');
+  for (const spec of specs) {
+    assert.ok(spec.includes('steps.tarball.outputs.tarball'),
+      `a publish step names ${spec} instead of the tarball the verify job built`);
+  }
 });
 
 test('release: a tag must name the version in package.json', () => {

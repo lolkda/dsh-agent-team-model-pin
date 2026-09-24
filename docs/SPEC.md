@@ -227,7 +227,7 @@ settings 命名空间 `agent-team-model-pin`：`{ sessions: { "<sessionId>": { p
 **发布流程（GitHub Actions）**
 
 - [release.yml](../.github/workflows/release.yml)：推送 `v<package.json version>` 标签触发真实发布；手动触发默认 dry-run，只有 `dry_run=false` 才真实发布。标签与 version 不一致时 `verify` 直接失败。
-- `verify` 与 `publish` 之间用 artifact 传递 tarball；`publish` 只发布该 tarball，不重新构建。发布 tarball 时 npm 不执行生命周期脚本，因此「验证过的字节」与「发出去的字节」相同。
+- `verify` 与 `publish` 之间用 artifact 传递 tarball；`publish` 只发布该 tarball，不重新构建。发布 tarball 时 npm 不执行生命周期脚本，因此「验证过的字节」与「发出去的字节」相同。传给 `npm publish` 的 tarball 路径必须是**绝对路径**：`release-artifact/pkg.tgz` 这种两段相对路径会被 npm 解析成 `owner/repo` 形式的 git 简写并去 `git ls-remote`，报出与发布无关的权限错误。预发布版本还必须显式给 `--tag`，否则 npm 直接拒绝发布。
 - DSH runtime 版本**不得写死在 workflow 或文档命令里**：必须从 `package.json` 的 `devDependencies["@deepseek-ai/dsh-agent"]` 读出，且必须与 `peerDependencies` 的声明一致，否则失败。写死会让门禁与实际发布的包对不上（本仓库曾因此用 0.1.6-alpha.2 的门禁验证 0.1.7-rc.1 的包）。
 - 打包契约：tarball 必须含 `dist/index.js`、`dist/index.d.ts`、`dist/web.js`、`dist/client.js`、`cordis.patch.yml`、`README.md`、`LICENSE`，且不得含 `src/`、`tests/`、`docs/`。
 - dist-tag：正式版 → `latest`；预发布 → `next`；仅当 registry 尚无 `latest` 时，预发布同时把 `latest` 指向自己（否则 `npm install <包名>` 解析不到）。判定由 `scripts/release-plan.mjs` 的纯函数 `planRelease` 完成，回归在 `tests/release.test.mjs`。registry 读取失败但不是 404 时必须中止，不得当作「尚未发布」。

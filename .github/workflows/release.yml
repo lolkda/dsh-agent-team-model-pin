@@ -209,7 +209,12 @@ jobs:
             ls -l release-artifact
             exit 1
           fi
-          find release-artifact -maxdepth 1 -name '*.tgz' -printf 'tarball=%p\n' >> "$GITHUB_OUTPUT"
+          # The path must be absolute. npm parses `release-artifact/pkg.tgz` as
+          # the GitHub shorthand owner/repo and tries `git ls-remote`, which
+          # fails as a permission error instead of publishing the local file.
+          tarball="$(realpath "$(find release-artifact -maxdepth 1 -name '*.tgz')")"
+          echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
+          echo "publishing ${tarball}"
           cat release-artifact/SHA256SUMS.txt
 
       - name: Decide the dist-tag from the live registry
