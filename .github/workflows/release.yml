@@ -291,23 +291,29 @@ jobs:
           version="${{ steps.plan.outputs.version }}"
           registry="https://registry.npmjs.org/"
           escaped="${name/\//%2f}"
+          document=/tmp/published-version.json
 
           # Not `npm view`: that reads the full package document, which served a
           # stale 404 at the CDN edge for minutes after the first publish. The
           # version document and the dist-tags endpoint answer fresh, and they are
           # the two facts worth checking — this version is served, and the tag the
           # plan chose points at it.
-          document=/tmp/published-version.json
-          for attempt in 1 2 3 4 5; do
+          #
+          # npm accepts the upload, signs the provenance and then says "your
+          # package is being processed and may take a few minutes to become
+          # available", so the wait has to be minutes, not seconds. A registry
+          # that has not caught up yet does NOT fail the release — npm already
+          # answered 200 for it — while a tag that points somewhere else does.
+          for attempt in $(seq 1 18); do
             if curl -sf "${registry}${escaped}/${version}" -o "${document}"; then
               break
             fi
-            echo "attempt ${attempt}: ${registry}${escaped}/${version} is not served yet, retrying"
-            sleep 5
+            echo "attempt ${attempt}/18: ${registry}${escaped}/${version} is not served yet"
+            sleep 10
           done
           if ! test -s "${document}"; then
-            echo "::error::${name}@${version} was published but ${registry}${escaped}/${version} still answers nothing"
-            exit 1
+            echo "::warning::npm accepted ${name}@${version} and signed its provenance, but ${registry} has not served it yet after 3 minutes. Confirm with: curl -sf ${registry}${escaped}/${version}; curl -sf ${registry}-/package/${escaped}/dist-tags"
+            exit 0
           fi
           served="$(node -p 'require("/tmp/published-version.json").version')"
           if [ "${served}" != "${version}" ]; then

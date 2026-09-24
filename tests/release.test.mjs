@@ -140,6 +140,20 @@ test('release: the post-publish check reads endpoints that answer fresh', () => 
     'the tag check must read the endpoint that is fresh while the package document lags');
 });
 
+test('release: a registry that has not caught up does not fail a release npm accepted', () => {
+  const publishJob = release.slice(release.indexOf('\n  publish:'));
+  const verifyStep = publishJob.slice(publishJob.indexOf('Verify what the registry now serves'));
+  // npm answers 200, signs the provenance, and then says the package "is being
+  // processed and may take a few minutes to become available" — so a hard
+  // failure on a slow registry marks a finished release as failed.
+  assert.ok(/::warning::/.test(verifyStep),
+    'a version the registry has not served yet must warn, not fail');
+  assert.ok(/seq 1 \d\d|seq 1 \d/.test(verifyStep),
+    'the wait has to be minutes, not the 25 seconds that turned 1.3.0 red after it had already published');
+  assert.ok(/tag points at/.test(verifyStep),
+    'a tag pointing somewhere else is a real failure and must still fail');
+});
+
 test('release: a tag must name the version in package.json', () => {
   assert.ok(/does not match package\.json version/.test(release));
 });
