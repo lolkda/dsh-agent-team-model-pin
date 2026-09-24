@@ -184,7 +184,8 @@ UI 复用 `settings.describe/mutate`，组合元数据只取不可变 `base`，�
 `native-client`、`cold-start`、`web-restart` 三个套件在机器上没有 DSH 安装时会 `skip`，而 `node --test` 仍然退出 0。CI 与发布工作流因此都会先安装 `@deepseek-ai/dsh`、显式固定 `DSH_TEST_INSTALL_ROOT`，再用 TAP 摘要断言 `# skipped 0`；跳过即为失败。本地想跑完整门禁：
 
 ```bash
-npm install --global @deepseek-ai/dsh@0.1.6-alpha.2
+# 版本从 package.json 读，避免门禁和实际发布的包对不上
+npm install --global "@deepseek-ai/dsh@$(node -p 'require("./package.json").devDependencies["@deepseek-ai/dsh-agent"]')"
 export DSH_TEST_INSTALL_ROOT="$(npm root -g)/@deepseek-ai/dsh"
 npm run check
 ```
@@ -193,7 +194,20 @@ npm run check
 
 - 仓库：<https://github.com/lolkda/dsh-agent-team-model-pin>（public）
 - [CI](.github/workflows/ci.yml)：push / PR / 手动验证，含上面的跳过守卫。
-- [发布工作流](.github/workflows/release.yml)：`verify` 通过后才 `publish`；`v*` 标签推送即真实发布，手动触发默认 dry-run（`dry_run=false` 才真实发布）。
+- [发布工作流](.github/workflows/release.yml)：`v*` 标签推送即真实发布；手动触发默认 dry-run（`dry_run=false` 才真实发布）。**标签名必须等于 `v` + `package.json` 的 version**，否则 `verify` 直接失败。
+
+流程是 `verify` → 打包 → `publish`，两步之间用 artifact 传递 tarball：
+
+1. `verify`：`npm ci` → 从 `package.json` 读出 DSH runtime 版本并安装（peer 与 devDependency 必须一致，否则失败）→ typecheck → build → 测试（`# skipped 0` 守卫）→ `smoke:dist` → 标签校验 → `npm pack` 出 tarball → 校验包内必须含 `dist/*` 与 bundle patch、且不含 `src/`、`tests/`、`docs/`。
+2. `publish`：只下载上一步的 tarball 再 `npm publish <tarball>`，**不重新构建**。发布 tarball 时 npm 不跑生命周期脚本，所以「发出去的字节」就是「被验证过的字节」，不会因为在另一台机器上重打包而产生差异。
+
+`dist-tag` 由 [scripts/release-plan.mjs](scripts/release-plan.mjs) 依据**实时 registry 状态**决定（回归见 [tests/release.test.mjs](tests/release.test.mjs)）：
+
+| 版本形态 | 发布到 | 说明 |
+|---|---|---|
+| 正式版（`1.3.0`） | `latest` | 不动 `next` |
+| 预发布（`1.3.0-rc.1`） | `next` | 已有 `latest` 时绝不移动 `latest` |
+| 预发布且 registry 还没有 `latest` | `next` + 同时把 `latest` 指向它 | 否则 `npm install <包名>` 直接解析不到；首次发布尤其需要 |
 
 工作流按仓库实际持有的凭据二选一：
 
@@ -202,7 +216,14 @@ npm run check
 | 仓库 secret `NPM_TOKEN` | `npm publish` 使用 granular access token | **首次发布唯一可行路径**，也是回退路径 |
 | 无 secret | `npm publish --provenance`，走 npm trusted publishing（OIDC） | 包已存在且已登记 trusted publisher 之后 |
 
-首次发布必须用 token（或本地 `npm publish`）：npm 只允许为**已存在于 registry 的包**配置 trusted publisher，所以 OIDC 无法创建包。首次发布后在 npmjs.com 的该包 Settings → Trusted Publisher 登记：
+首次发布必须用 token（或本地 `npm publish`）：npm 只允许为**已存在于 registry 的包**配置 trusted publisher，所以 OIDC 无法创建包。首次发布后登记 trusted publisher：
+
+```bash
+npm trust github @lolkda/dsh-agent-team-model-pin \
+  --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish -y
+```
+
+等价的一次性网页配置：npmjs.com → 该包 → Settings → Trusted Publisher
 
 ```
 publisher:            GitHub Actions
@@ -211,6 +232,8 @@ repository:           dsh-agent-team-model-pin
 workflow filename:    release.yml
 ```
 
-登记后即可删掉 `NPM_TOKEN`，发布不再依赖长期令牌。未登记时 OIDC 发布会以裸 404 失败——**provenance 签名成功只证明构建来源，不证明 npm 授权了这次上传**；工作流会捕获该失败并打印上面这份排查清单。
+登记后即可删掉 `NPM_TOKEN`，发布不再依赖长期令牌。未登记时 OIDC 发布会以裸 404 失败——**provenance 签名成功只证明构建来源，不证明 npm 授权了这次上传**；工作流会捕获该失败并打印上面这份排查清单。写 `dist-tag` 只认 token（OIDC 不覆盖 `npm dist-tag add`），所以需要「首次发布同时占住 `latest`」时仍要走 `NPM_TOKEN`。
+
+只手动发布一次、不走工作流时：`npm publish ./<tarball> --access public --tag <next|latest>`，再按上表补 `latest`。
 
 - MIT，见 [LICENSE](LICENSE)。

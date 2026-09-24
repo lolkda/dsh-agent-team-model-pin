@@ -1,9 +1,14 @@
 name: release
 
-# Publishes @lolkda/dsh-agent-team-model-pin to npm.
+# Packages @lolkda/dsh-agent-team-model-pin, verifies it, and publishes the exact
+# tarball the verify job built — the published bytes are the verified bytes.
 #
-# Two credentials are supported, and the workflow uses whichever the
-# repository actually has:
+# Triggers:
+#   * push a tag matching v<package.json version>    -> real publish
+#   * workflow_dispatch with dry_run=true (default)  -> full pipeline, no publish
+#   * workflow_dispatch with dry_run=false           -> real publish
+#
+# Credentials, two paths, whichever the repository has:
 #
 #   * NPM_TOKEN secret -> a granular access token with publish rights. This is
 #     the only path that can perform the FIRST publish: npm only accepts a
@@ -12,19 +17,21 @@ name: release
 #     create the package.
 #   * no secret        -> npm trusted publishing (OIDC). Once the package
 #     exists and this repository is registered as its trusted publisher,
-#     releases need no long-lived token.
+#     releases need no long-lived token:
+#       npm trust github @lolkda/dsh-agent-team-model-pin \
+#         --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish -y
+#     Equivalent one-time setup on npmjs.com -> the package -> Settings ->
+#     Trusted Publisher:
+#       publisher:            GitHub Actions
+#       organization or user: lolkda
+#       repository:           dsh-agent-team-model-pin
+#       workflow filename:    release.yml
 #
-# One-time setup for the OIDC path, on npmjs.com -> the package -> Settings ->
-# Trusted Publisher:
-#   publisher:            GitHub Actions
-#   organization or user: lolkda
-#   repository:           dsh-agent-team-model-pin
-#   workflow filename:    release.yml
-#
-# Triggers:
-#   * push a tag matching v<package.json version>    -> real publish
-#   * workflow_dispatch with dry_run=true (default)  -> full pipeline, no publish
-#   * workflow_dispatch with dry_run=false           -> real publish
+# Dist-tags: a stable version owns `latest`; a prerelease owns `next`. A
+# prerelease also claims `latest` while the registry has no `latest` at all, so
+# that `npm install <pkg>` resolves on the very first release.
+# scripts/release-plan.mjs makes that decision from the live registry and is
+# covered by tests/release.test.mjs.
 
 on:
   push:
@@ -37,20 +44,18 @@ on:
         type: boolean
         default: true
 
+# A publish is irreversible; never let two runs race on the same ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
-env:
-  # The DSH runtime the integration suites resolve. It matches the
-  # @deepseek-ai/dsh-agent devDependency and the peer range in package.json.
-  DSH_RUNTIME_VERSION: 0.1.6-alpha.2
-
 jobs:
   verify:
-    name: Verify the release
+    name: Verify and pack
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
 
@@ -62,6 +67,25 @@ jobs:
 
       - name: Install
         run: npm ci --no-audit --no-fund
+
+      # Never pin the runtime here: a literal is how this gate silently drifted
+      # from the package it was gating. The peer range and the devDependency in
+      # package.json are the contract, so the runtime is read from there.
+      - name: Resolve the DSH runtime version from package.json
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./package.json").devDependencies["@deepseek-ai/dsh-agent"]')"
+          peer="$(node -p 'require("./package.json").peerDependencies["@deepseek-ai/dsh-agent"]')"
+          if [ -z "${version}" ]; then
+            echo "::error::package.json declares no @deepseek-ai/dsh-agent devDependency to verify against"
+            exit 1
+          fi
+          if [ "${version}" != "${peer}" ]; then
+            echo "::error::package.json disagrees with itself: peer ${peer} vs expected ${version}"
+            exit 1
+          fi
+          echo "DSH_RUNTIME_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "the integration suites will run against DSH ${version}"
 
       # The native Client, cold start and Web restart suites skip themselves
       # when the machine has no DSH installation, and `node --test` still exits
@@ -98,7 +122,6 @@ jobs:
         run: npm run smoke:dist
 
       - name: The tag must name the version being published
-        id: version
         run: |
           set -euo pipefail
           version="$(node -p 'require("./package.json").version')"
@@ -106,11 +129,51 @@ jobs:
             echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version v${version}"
             exit 1
           fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "release version ${version}"
 
-      - name: Show what would be published
-        run: npm pack --dry-run
+      # Logs the registry state and the dist-tag this release would use. The
+      # publish job re-runs the same script so its decision is made against the
+      # registry as it is at publish time, not as it was here.
+      - name: Show the dist-tag plan
+        run: node scripts/release-plan.mjs
+
+      - name: Pack the tarball that will be published
+        id: pack
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifact
+          npm pack --json > /tmp/pack.json
+          filename="$(node -p 'require("/tmp/pack.json")[0].filename')"
+          mv "${filename}" "release-artifact/${filename}"
+          tarball="release-artifact/${filename}"
+          sha256sum "${tarball}" | tee release-artifact/SHA256SUMS.txt
+
+          # `files` in package.json is the packaging contract: the built entries
+          # and the bundle patch ship, source and tests never do.
+          contents="$(tar -tzf "${tarball}" | sed 's:/$::')"
+          for required in \
+            package/dist/index.js package/dist/index.d.ts package/dist/web.js \
+            package/dist/client.js package/cordis.patch.yml package/README.md package/LICENSE
+          do
+            printf '%s\n' "${contents}" | grep -qx "${required}" || {
+              echo "::error::${required} is missing from ${tarball}"
+              exit 1
+            }
+          done
+          if printf '%s\n' "${contents}" | grep -qE '^package/(src|tests|docs)/'; then
+            echo "::error::${tarball} ships source, tests or docs; package.json files must keep them out"
+            printf '%s\n' "${contents}" | grep -E '^package/(src|tests|docs)/'
+            exit 1
+          fi
+          printf '%s\n' "${contents}"
+
+      - name: Hand the verified tarball to the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: release-artifact/
+          if-no-files-found: error
+          retention-days: 7
 
   publish:
     name: Publish to npm
@@ -126,10 +189,32 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-          cache: npm
 
-      - name: Install
-        run: npm ci --no-audit --no-fund
+      - name: Download the tarball the verify job built
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-tarball
+          path: release-artifact
+
+      # No `npm ci`, no rebuild, no lifecycle scripts: publishing a tarball
+      # publishes exactly those bytes, and the gate that approved them ran in
+      # the verify job.
+      - name: Locate the tarball
+        id: tarball
+        run: |
+          set -euo pipefail
+          count="$(find release-artifact -maxdepth 1 -name '*.tgz' | wc -l)"
+          if [ "${count}" != "1" ]; then
+            echo "::error::expected exactly one tarball in release-artifact, found ${count}"
+            ls -l release-artifact
+            exit 1
+          fi
+          find release-artifact -maxdepth 1 -name '*.tgz' -printf 'tarball=%p\n' >> "$GITHUB_OUTPUT"
+          cat release-artifact/SHA256SUMS.txt
+
+      - name: Decide the dist-tag from the live registry
+        id: plan
+        run: node scripts/release-plan.mjs
 
       - name: Choose the publish credential
         id: auth
@@ -145,28 +230,70 @@ jobs:
             echo "publishing with npm trusted publishing (OIDC)"
           fi
 
-      # A manual run on a branch exercises packaging without publishing.
+      # A manual run exercises the whole publish path, including the tarball and
+      # the dist-tag decision, without touching the registry.
       - name: Publish (dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
-        run: npm publish --dry-run --access public
+        run: |
+          npm publish "${{ steps.tarball.outputs.tarball }}" \
+            --dry-run --access public --tag "${{ steps.plan.outputs.dist_tag }}"
 
       - name: Publish with the repository token
         if: steps.auth.outputs.mode == 'token' && (github.ref_type == 'tag' || inputs.dry_run == false)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+        run: |
+          npm publish "${{ steps.tarball.outputs.tarball }}" \
+            --access public --tag "${{ steps.plan.outputs.dist_tag }}"
 
       - name: Publish with OIDC trusted publishing
         if: steps.auth.outputs.mode == 'oidc' && (github.ref_type == 'tag' || inputs.dry_run == false)
         run: |
           set -euo pipefail
-          if npm publish --provenance --access public; then
+          if npm publish "${{ steps.tarball.outputs.tarball }}" \
+            --provenance --access public --tag "${{ steps.plan.outputs.dist_tag }}"; then
             exit 0
           fi
-          # A provenance signature proves the build, not that npm authorized
-          # the upload; an unauthorized OIDC publish fails as a bare 404.
+          # A provenance signature proves the build, not that npm authorized the
+          # upload; an unauthorized OIDC publish fails as a bare 404.
           echo "::error::npm rejected the OIDC publish. Check, in order:"
           echo "::error::  1. the package exists on npm — the first publish needs NPM_TOKEN or a local npm publish, because npm only accepts a trusted publisher for a package that already exists"
-          echo "::error::  2. npmjs.com -> the package -> Settings -> Trusted Publisher is publisher=GitHub Actions, user=lolkda, repository=dsh-agent-team-model-pin, workflow=release.yml"
+          echo "::error::  2. the trusted publisher is registered: npm trust github ${{ steps.plan.outputs.name }} --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish"
           echo "::error::  3. package.json repository.url matches this repository exactly"
           exit 1
+
+      # npm accepts dist-tag writes only from a token, so a first publish must
+      # have gone through NPM_TOKEN. By the time OIDC publishes, the package
+      # exists and normally already owns `latest`.
+      - name: Point latest at a prerelease that has no latest yet
+        if: steps.plan.outputs.also_latest == 'true' && (github.ref_type == 'tag' || inputs.dry_run == false)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          spec="${{ steps.plan.outputs.name }}@${{ steps.plan.outputs.version }}"
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::warning::${spec} is published under ${{ steps.plan.outputs.dist_tag }} but the registry still has no latest tag, so the bare package name does not install yet. Set it with a token: npm dist-tag add ${spec} latest"
+            exit 0
+          fi
+          npm dist-tag add "${spec}" latest
+
+      - name: Verify what the registry now serves
+        if: github.ref_type == 'tag' || inputs.dry_run == false
+        run: |
+          set -euo pipefail
+          name="${{ steps.plan.outputs.name }}"
+          version="${{ steps.plan.outputs.version }}"
+          published=""
+          for attempt in 1 2 3 4 5; do
+            published="$(npm view "${name}@${version}" version || true)"
+            [ "${published}" = "${version}" ] && break
+            echo "attempt ${attempt}: the registry still reports '${published}', retrying"
+            sleep 5
+          done
+          if [ "${published}" != "${version}" ]; then
+            echo "::error::${name}@${version} was published but the registry reports '${published}'"
+            exit 1
+          fi
+          npm dist-tag ls "${name}"
+          echo "published ${name}@${version} under ${{ steps.plan.outputs.dist_tag }}"

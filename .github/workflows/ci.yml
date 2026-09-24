@@ -9,11 +9,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # The DSH runtime the integration suites resolve. It matches the
-  # @deepseek-ai/dsh-agent devDependency and the peer range in package.json.
-  DSH_RUNTIME_VERSION: 0.1.6-alpha.2
-
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -28,6 +23,25 @@ jobs:
 
       - name: Install
         run: npm ci --no-audit --no-fund
+
+      # Never pin the runtime here: a literal is how this gate silently drifted
+      # from the package it was gating. The peer range and the devDependency in
+      # package.json are the contract, so the runtime is read from there.
+      - name: Resolve the DSH runtime version from package.json
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./package.json").devDependencies["@deepseek-ai/dsh-agent"]')"
+          peer="$(node -p 'require("./package.json").peerDependencies["@deepseek-ai/dsh-agent"]')"
+          if [ -z "${version}" ]; then
+            echo "::error::package.json declares no @deepseek-ai/dsh-agent devDependency to verify against"
+            exit 1
+          fi
+          if [ "${version}" != "${peer}" ]; then
+            echo "::error::package.json disagrees with itself: peer ${peer} vs expected ${version}"
+            exit 1
+          fi
+          echo "DSH_RUNTIME_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "the integration suites will run against DSH ${version}"
 
       # The native Client, cold start and Web restart suites skip themselves
       # when the machine has no DSH installation, and `node --test` still exits

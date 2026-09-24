@@ -12,3 +12,8 @@ npm-debug.log*
 # session token, and the files are reproducible with `npm run check` plus
 # the probes under tests/fixtures/.
 artifacts/
+
+# The release workflow's pack step, replicated locally: the tarball that was
+# verified is the tarball that gets published, so the checksum file is local
+# evidence, not source.
+release-artifact/

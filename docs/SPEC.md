@@ -224,6 +224,15 @@ settings 命名空间 `agent-team-model-pin`：`{ sessions: { "<sessionId>": { p
 - 脚本：`typecheck` / `build` / `test` / `check`（前四者串联）/ `smoke:dist`（断言 `dist` 入口的 `name` 与 `apply`）/ `prepare`（`build`；覆盖 `npm pack`、`npm publish` 与 git 安装，避免 `.gitignore` 忽略 `dist/` 后打出空壳包）/ `prepublishOnly`（`check` + `smoke:dist`）。
 - **不再要求**手工 `node_modules` 符号链接：`npm install` 会把 `schemastery` 装进包内 `node_modules`，`link:` 安装下的 realpath 上溯即可解析。
 
+**发布流程（GitHub Actions）**
+
+- [release.yml](../.github/workflows/release.yml)：推送 `v<package.json version>` 标签触发真实发布；手动触发默认 dry-run，只有 `dry_run=false` 才真实发布。标签与 version 不一致时 `verify` 直接失败。
+- `verify` 与 `publish` 之间用 artifact 传递 tarball；`publish` 只发布该 tarball，不重新构建。发布 tarball 时 npm 不执行生命周期脚本，因此「验证过的字节」与「发出去的字节」相同。
+- DSH runtime 版本**不得写死在 workflow 或文档命令里**：必须从 `package.json` 的 `devDependencies["@deepseek-ai/dsh-agent"]` 读出，且必须与 `peerDependencies` 的声明一致，否则失败。写死会让门禁与实际发布的包对不上（本仓库曾因此用 0.1.6-alpha.2 的门禁验证 0.1.7-rc.1 的包）。
+- 打包契约：tarball 必须含 `dist/index.js`、`dist/index.d.ts`、`dist/web.js`、`dist/client.js`、`cordis.patch.yml`、`README.md`、`LICENSE`，且不得含 `src/`、`tests/`、`docs/`。
+- dist-tag：正式版 → `latest`；预发布 → `next`；仅当 registry 尚无 `latest` 时，预发布同时把 `latest` 指向自己（否则 `npm install <包名>` 解析不到）。判定由 `scripts/release-plan.mjs` 的纯函数 `planRelease` 完成，回归在 `tests/release.test.mjs`。registry 读取失败但不是 404 时必须中止，不得当作「尚未发布」。
+- 凭据：首次发布必须使用仓库 secret `NPM_TOKEN`（npm 只允许为已存在的包登记 trusted publisher，OIDC 无法创建包）；登记后改走 OIDC `npm publish --provenance`。`npm dist-tag add` 只接受 token，不覆盖 OIDC。
+
 
 ## 7. 验收
 
