@@ -111,6 +111,18 @@ test('release: a prerelease stops before publishing while the bare name would in
     'trusted publishing cannot write dist-tags, so the refusal must run before the upload, not after it');
 });
 
+test('release: every plan output the workflow reads is one the plan script writes', async () => {
+  const script = await readFile(new URL('../scripts/release-plan.mjs', import.meta.url), 'utf8');
+  const written = new Set([...script.matchAll(/`([a-z_]+)=\$\{/g)].map((match) => match[1]));
+  assert.ok(written.size >= 4, 'the plan script must publish its fields to GITHUB_OUTPUT');
+  const read = [...release.matchAll(/steps\.plan\.outputs\.([a-z_]+)/g)].map((match) => match[1]);
+  assert.ok(read.length >= 4, 'the workflow must key its decisions off the plan');
+  for (const key of read) {
+    assert.ok(written.has(key),
+      `the workflow reads steps.plan.outputs.${key}, but release-plan.mjs never writes it — GitHub substitutes an empty string, so the check would silently stop working`);
+  }
+});
+
 test('release: a tag must name the version in package.json', () => {
   assert.ok(/does not match package\.json version/.test(release));
 });
