@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,34 +23,40 @@ const release = await readFile(new URL('../.github/workflows/release.yml', impor
 const literalDshPin = /@deepseek-ai\/dsh@\d/;
 const deriveFromManifest = /devDependencies\["@deepseek-ai\/dsh-agent"\]/;
 
-// A stub `npm` on PATH keeps these tests off the network while still exercising
-// the real child-process call the workflow makes.
-async function withFakeNpm(t, { stdout = '', stderr = '', code = 0 }) {
-  const bin = await mkdtemp(join(tmpdir(), 'atmp-release-bin-'));
-  t.after(() => rm(bin, { recursive: true, force: true }));
-  const stub = join(bin, 'npm');
-  await writeFile(stub, `#!/bin/sh\nprintf '%s' "$FAKE_NPM_STDOUT"\nprintf '%s' "$FAKE_NPM_STDERR" >&2\nexit "$FAKE_NPM_EXIT"\n`);
-  await chmod(stub, 0o755);
-  return async function runCli() {
-    const outputFile = join(bin, 'github-output.txt');
-    await writeFile(outputFile, '');
+// A real registry stand-in: the plan's whole job is to read the registry's
+// dist-tags, so these tests serve that over HTTP instead of stubbing npm.
+async function withRegistry(t, responses) {
+  const pending = [...responses];
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url);
+    const next = pending.length > 1 ? pending.shift() : pending[0];
+    response.writeHead(next.status, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(next.body ?? {}));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  return { registry: `http://127.0.0.1:${port}`, requests };
+}
+
+function runCli({ registry }, t) {
+  const outputFile = join(tmpdir(), `atmp-github-output-${process.pid}-${Math.random().toString(16).slice(2)}.txt`);
+  t.after(() => rm(outputFile, { force: true }));
+  return writeFile(outputFile, '').then(async () => {
+    const env = {
+      ...process.env,
+      GITHUB_OUTPUT: outputFile,
+      RELEASE_PLAN_REGISTRY: registry,
+      RELEASE_PLAN_RETRY_MS: '5', // the retry must not make the suite slow
+    };
     try {
-      const { stdout: out } = await exec(process.execPath, [join(project, 'scripts/release-plan.mjs')], {
-        cwd: project,
-        env: {
-          ...process.env,
-          PATH: `${bin}:${process.env.PATH}`,
-          GITHUB_OUTPUT: outputFile,
-          FAKE_NPM_STDOUT: stdout,
-          FAKE_NPM_STDERR: stderr,
-          FAKE_NPM_EXIT: String(code),
-        },
-      });
-      return { out, outputs: await readFile(outputFile, 'utf8') };
+      const { stdout } = await exec(process.execPath, [join(project, 'scripts/release-plan.mjs')], { cwd: project, env });
+      return { out: stdout, outputs: await readFile(outputFile, 'utf8') };
     } catch (error) {
       return { out: error.stdout ?? '', outputs: await readFile(outputFile, 'utf8'), error };
     }
-  };
+  });
 }
 
 test('release: every workflow derives the DSH runtime version from package.json', () => {
@@ -163,9 +170,9 @@ test('release-plan: the plan describes the version package.json declares', () =>
   assert.ok(plan.distTag === 'next' || plan.distTag === 'latest');
 });
 
-test('release-plan CLI: a package npm cannot find is a first publish under next', async (t) => {
-  const runCli = await withFakeNpm(t, { stderr: 'npm error code E404\nnpm error 404 Not Found\n', code: 1 });
-  const { out, outputs, error } = await runCli();
+test('release-plan CLI: a package the registry does not have is a first publish under next', async (t) => {
+  const { registry, requests } = await withRegistry(t, [{ status: 404, body: { error: 'Not found' } }]);
+  const { out, outputs, error } = await runCli({ registry }, t);
   assert.equal(error, undefined, 'a missing package is the expected first-release state, not a failure');
   const plan = JSON.parse(out);
   assert.equal(plan.name, pkg.name);
@@ -174,11 +181,29 @@ test('release-plan CLI: a package npm cannot find is a first publish under next'
   assert.equal(plan.firstPublish, true);
   assert.match(outputs, /^dist_tag=next$/m);
   assert.match(outputs, /^latest_missing=true$/m);
+  assert.equal(requests[0], `/-/package/${pkg.name.replace('/', '%2f')}/dist-tags`,
+    'the plan must read the package-scoped dist-tags endpoint, whose answer is the one the publish path itself uses');
+});
+
+test('release-plan CLI: a just-published package whose edge cache still answers 404 is not reported as unpublished', async (t) => {
+  // Exactly what the CDN did minutes after the first publish: the packument was
+  // still 404 while dist-tags already answered. Reading it as "never published"
+  // would refuse a release that is only waiting out replication.
+  const { registry, requests } = await withRegistry(t, [
+    { status: 404, body: { error: 'Not found' } },
+    { status: 200, body: { next: '1.3.0-rc.1', latest: '1.3.0-rc.1' } },
+  ]);
+  const { out, outputs } = await runCli({ registry }, t);
+  const plan = JSON.parse(out);
+  assert.equal(plan.firstPublish, false, 'a stale 404 must not stop a release of a package that exists');
+  assert.equal(plan.latestMissing, false);
+  assert.ok(requests.length >= 2, `the read must be retried before concluding "not published" (got ${requests.length} request(s))`);
+  assert.match(outputs, /^first_publish=false$/m);
 });
 
 test('release-plan CLI: live dist-tags decide the tag and the latest repair', async (t) => {
-  const runCli = await withFakeNpm(t, { stdout: '{"latest":"1.2.3","next":"1.2.4-rc.1"}' });
-  const { out, outputs } = await runCli();
+  const { registry } = await withRegistry(t, [{ status: 200, body: { latest: '1.2.3', next: '1.2.4-rc.1' } }]);
+  const { out, outputs } = await runCli({ registry }, t);
   const plan = JSON.parse(out);
   assert.equal(plan.distTag, 'next');
   assert.equal(plan.latestMissing, false);
@@ -188,9 +213,9 @@ test('release-plan CLI: live dist-tags decide the tag and the latest repair', as
 });
 
 test('release-plan CLI: a registry failure that is not a 404 fails instead of guessing', async (t) => {
-  const runCli = await withFakeNpm(t, { stderr: 'npm error code ETIMEDOUT\nnpm error network request failed\n', code: 1 });
-  const { out, error } = await runCli();
-  assert.notEqual(error, undefined, 'a network failure must not be mistaken for "not published yet"');
+  const { registry } = await withRegistry(t, [{ status: 503, body: { error: 'service unavailable' } }]);
+  const { out, error } = await runCli({ registry }, t);
+  assert.notEqual(error, undefined, 'a registry outage must not be mistaken for "not published yet"');
   assert.equal(out.includes('"distTag"'), false, 'no plan may be emitted from a failed registry read');
-  assert.match(error.stderr, /ETIMEDOUT|dist-tags/);
+  assert.match(error.stderr, /503|dist-tags/);
 });
