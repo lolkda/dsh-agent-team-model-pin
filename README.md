@@ -206,34 +206,38 @@ npm run check
 | 版本形态 | 发布到 | 说明 |
 |---|---|---|
 | 正式版（`1.3.0`） | `latest` | 不动 `next` |
-| 预发布（`1.3.0-rc.1`） | `next` | 已有 `latest` 时绝不移动 `latest` |
-| 预发布且 registry 还没有 `latest` | `next` + 同时把 `latest` 指向它 | 否则 `npm install <包名>` 直接解析不到；首次发布尤其需要 |
+| 预发布（`1.3.0-rc.1`），registry 已有 `latest` | `next` | 绝不移动 `latest` |
+| 预发布，registry 还没有 `latest` | **不发布**（发布前中止） | trusted publishing 写不了 dist-tag，此时 `npm install <包名>` 解析不到任何版本；工作流宁可中止也不发一个装不上的包 |
 
-工作流按仓库实际持有的凭据二选一：
+发布使用 **npm trusted publishing（OIDC）**：GitHub 签发短期身份令牌，npm 用它换取本包的发布权，`npm publish --provenance` 记录构建来源。仓库里**不保存任何长期令牌**，CI 里也不会出现 2FA 提示。
 
-| 凭据 | 行为 | 适用阶段 |
-|---|---|---|
-| 仓库 secret `NPM_TOKEN` | `npm publish` 使用 granular access token | **首次发布唯一可行路径**，也是回退路径 |
-| 无 secret | `npm publish --provenance`，走 npm trusted publishing（OIDC） | 包已存在且已登记 trusted publisher 之后 |
+不能改成用 token 发布：本账号开启了「写操作强制 2FA」，CI 里用 granular token 发布会直接被 npm 拒绝（`EOTP: This operation requires a one-time password`），而 npm 正在撤回「可绕过 2FA 的 token 用于直接发布」这条路；`npm publish`、`npm dist-tag add`、`npm trust` 三个动作实测都要求 OTP。OIDC 是唯一可行的 CI 发布方式。
 
-首次发布必须用 token（或本地 `npm publish`）：npm 只允许为**已存在于 registry 的包**配置 trusted publisher，所以 OIDC 无法创建包。首次发布后登记 trusted publisher：
+两个 npm 侧前提，都只需要做一次，且都必须由你带 2FA 在 CI 之外完成：
 
-```bash
-npm trust github @lolkda/dsh-agent-team-model-pin \
-  --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish -y
-```
+1. **包必须已存在**。npm 只允许给**已存在的包**登记 trusted publisher（`npm trust` 的 Prerequisites 原文是 “Package must exist”），新包做 staged publish 也会返回 404。所以首次发布要手工上传一次本工作流产出的、已通过门禁的 tarball：
 
-等价的一次性网页配置：npmjs.com → 该包 → Settings → Trusted Publisher
+   ```bash
+   npm publish <tarball> --access public --tag next      # 会交互式提示输入 6 位验证码
+   npm dist-tag add @lolkda/dsh-agent-team-model-pin@<version> latest
+   ```
 
-```
-publisher:            GitHub Actions
-organization or user: lolkda
-repository:           dsh-agent-team-model-pin
-workflow filename:    release.yml
-```
+2. **登记 trusted publisher**：
 
-登记后即可删掉 `NPM_TOKEN`，发布不再依赖长期令牌。未登记时 OIDC 发布会以裸 404 失败——**provenance 签名成功只证明构建来源，不证明 npm 授权了这次上传**；工作流会捕获该失败并打印上面这份排查清单。写 `dist-tag` 只认 token（OIDC 不覆盖 `npm dist-tag add`），所以需要「首次发布同时占住 `latest`」时仍要走 `NPM_TOKEN`。
+   ```bash
+   npm trust github @lolkda/dsh-agent-team-model-pin \
+     --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish -y
+   ```
 
-只手动发布一次、不走工作流时：`npm publish ./<tarball> --access public --tag <next|latest>`，再按上表补 `latest`。
+   等价的一次性网页配置：npmjs.com → 该包 → Settings → Trusted Publisher
+
+   ```
+   publisher:            GitHub Actions
+   organization or user: lolkda
+   repository:           dsh-agent-team-model-pin
+   workflow filename:    release.yml
+   ```
+
+完成后推送 `v*` 标签即自动发布，带 provenance，不再需要任何令牌。未登记时 OIDC 发布会以裸 404 失败——**provenance 签名成功只证明构建来源，不证明 npm 授权了这次上传**；工作流会捕获该失败并打印上面这份排查清单。包还不存在时，工作流在发布前就停下并打印上面那份 bootstrap 步骤，不会以 npm 的裸 404 收场。
 
 - MIT，见 [LICENSE](LICENSE)。

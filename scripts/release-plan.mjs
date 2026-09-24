@@ -1,11 +1,14 @@
-// Decides which npm dist-tag a release publishes under, and whether the publish
-// must additionally claim `latest`.
+// Decides which npm dist-tag a release publishes under, and whether the release
+// must stop instead of publishing.
 //
 // Rule: a stable version owns `latest`; a prerelease owns `next`. A prerelease
-// also claims `latest` only while the registry has no `latest` at all — without
-// it `npm install <pkg>` (and the plugin manager behind it) resolves to nothing,
-// which is a worse first release than an rc on `latest`. Once a stable release
-// owns `latest`, later prereleases never move it.
+// released while the registry has no `latest` at all is `latestMissing`: the
+// bare package name would install nothing, and trusted publishing — the only
+// credential this repository has — covers `npm publish` only, never
+// `npm dist-tag add`. Such a release must stop before uploading, and the
+// maintainer resolves it out of band. `firstPublish` says the package is not on
+// the registry at all, which npm's trusted publishing cannot fix either: npm
+// only accepts a trusted publisher for a package that already exists.
 //
 // Run directly (`node scripts/release-plan.mjs`) to query the registry and print
 // the plan as JSON on stdout; with GITHUB_OUTPUT set it also appends the
@@ -18,7 +21,7 @@ import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
 
-/** @returns {{version: string, prerelease: boolean, distTag: 'next'|'latest', alsoLatest: boolean, firstPublish: boolean}} */
+/** @returns {{version: string, prerelease: boolean, distTag: 'next'|'latest', latestMissing: boolean, firstPublish: boolean}} */
 export function planRelease({ version, existingTags = {} }) {
   if (typeof version !== 'string' || version === '') throw new Error('planRelease needs a version');
   const prerelease = version.includes('-');
@@ -26,7 +29,7 @@ export function planRelease({ version, existingTags = {} }) {
     version,
     prerelease,
     distTag: prerelease ? 'next' : 'latest',
-    alsoLatest: prerelease && existingTags.latest === undefined,
+    latestMissing: prerelease && existingTags.latest === undefined,
     firstPublish: Object.keys(existingTags).length === 0,
   };
 }
@@ -57,7 +60,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify({ name: manifest.name, registry, existingTags, ...plan }, null, 2)}\n`);
   process.stderr.write(
     `${manifest.name}@${plan.version}: publish under --tag ${plan.distTag}`
-    + `${plan.alsoLatest ? ' and also point latest at it (the registry has no latest yet)' : ''}\n`
+    + `${plan.latestMissing ? ' — the registry has no latest tag, so this release must not be published' : ''}\n`
     + `existing dist-tags: ${plan.firstPublish ? '(none — first publish)' : JSON.stringify(existingTags)}\n`,
   );
 
@@ -66,7 +69,7 @@ async function main() {
       `name=${manifest.name}`,
       `version=${plan.version}`,
       `dist_tag=${plan.distTag}`,
-      `also_latest=${plan.alsoLatest}`,
+      `latest_missing=${plan.latestMissing}`,
       `first_publish=${plan.firstPublish}`,
       '',
     ].join('\n'));

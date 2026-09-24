@@ -3,33 +3,45 @@ name: release
 # Packages @lolkda/dsh-agent-team-model-pin, verifies it, and publishes the exact
 # tarball the verify job built — the published bytes are the verified bytes.
 #
+# Publishing is npm trusted publishing (OIDC): GitHub mints a short-lived
+# identity token, npm exchanges it for publish rights on this package, and
+# `npm publish --provenance` records which workflow and commit built the
+# tarball. No long-lived token is stored in this repository and no 2FA prompt
+# can appear in CI. A 2FA-protected account cannot publish from CI with a token
+# at all: npm answers `EOTP: This operation requires a one-time password`, and
+# granular tokens that bypass 2FA are being withdrawn for direct publishing.
+#
+# Two npm-side prerequisites, both one-time and both needing the maintainer's
+# 2FA, so both happen outside CI:
+#
+#   1. The package must already exist. npm refuses to configure a trusted
+#      publisher for a package the registry does not have yet ("Package must
+#      exist", npm trust prerequisites), and a staged publish of a new package
+#      returns the same 404. The first publish is therefore an upload from a
+#      machine where the maintainer can answer the OTP prompt, using the tarball
+#      this workflow produced:
+#        npm publish <tarball> --access public --tag next
+#        npm dist-tag add @lolkda/dsh-agent-team-model-pin@<version> latest
+#   2. Register this workflow as a trusted publisher:
+#        npm trust github @lolkda/dsh-agent-team-model-pin \
+#          --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish -y
+#      Equivalent one-time setup on npmjs.com -> the package -> Settings ->
+#      Trusted Publisher:
+#        publisher:            GitHub Actions
+#        organization or user: lolkda
+#        repository:           dsh-agent-team-model-pin
+#        workflow filename:    release.yml
+#
 # Triggers:
 #   * push a tag matching v<package.json version>    -> real publish
 #   * workflow_dispatch with dry_run=true (default)  -> full pipeline, no publish
 #   * workflow_dispatch with dry_run=false           -> real publish
 #
-# Credentials, two paths, whichever the repository has:
-#
-#   * NPM_TOKEN secret -> a granular access token with publish rights. This is
-#     the only path that can perform the FIRST publish: npm only accepts a
-#     trusted publisher for a package that already exists on the registry
-#     ("Package must exist", npm trust prerequisites), so OIDC alone cannot
-#     create the package.
-#   * no secret        -> npm trusted publishing (OIDC). Once the package
-#     exists and this repository is registered as its trusted publisher,
-#     releases need no long-lived token:
-#       npm trust github @lolkda/dsh-agent-team-model-pin \
-#         --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish -y
-#     Equivalent one-time setup on npmjs.com -> the package -> Settings ->
-#     Trusted Publisher:
-#       publisher:            GitHub Actions
-#       organization or user: lolkda
-#       repository:           dsh-agent-team-model-pin
-#       workflow filename:    release.yml
-#
-# Dist-tags: a stable version owns `latest`; a prerelease owns `next`. A
-# prerelease also claims `latest` while the registry has no `latest` at all, so
-# that `npm install <pkg>` resolves on the very first release.
+# Dist-tags: a stable version owns `latest`; a prerelease owns `next`. Trusted
+# publishing covers `npm publish` only — npm accepts dist-tag writes from a
+# token, which this workflow deliberately does not have — so a prerelease that
+# would leave the package uninstallable by its bare name stops the release
+# instead of publishing something nobody can install.
 # scripts/release-plan.mjs makes that decision from the live registry and is
 # covered by tests/release.test.mjs.
 
@@ -95,7 +107,7 @@ jobs:
         run: |
           set -euo pipefail
           npm install --global "@deepseek-ai/dsh@${DSH_RUNTIME_VERSION}"
-          root="$(npm root -g)/@deepseek-ai/dsh"
+          root="$(npm root --global)/@deepseek-ai/dsh"
           test -f "${root}/lib/profile-boot.js" || {
             echo "::error::no DSH runtime at ${root}; refusing to publish behind a gate that would silently skip the integration suites"
             exit 1
@@ -181,7 +193,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # OIDC trusted publishing + provenance
+      id-token: write # the OIDC token trusted publishing and provenance need
     steps:
       - uses: actions/checkout@v5
 
@@ -221,38 +233,42 @@ jobs:
         id: plan
         run: node scripts/release-plan.mjs
 
-      - name: Choose the publish credential
-        id: auth
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Trusted publishing cannot create the package: npm wants a trusted
+      # publisher configured for a package that already exists. Failing here
+      # explains that, where npm's own answer is a bare 404.
+      - name: The package must already exist on npm
+        if: steps.plan.outputs.first_publish == 'true' && (github.ref_type == 'tag' || inputs.dry_run == false)
+        run: |
+          echo "::error::${{ steps.plan.outputs.name }} is not on the registry yet, and trusted publishing cannot create it."
+          echo "::error::   1. publish once from a machine that can answer the 2FA prompt:"
+          echo "::error::        npm publish <tarball> --access public --tag ${{ steps.plan.outputs.dist_tag }}"
+          echo "::error::        npm dist-tag add ${{ steps.plan.outputs.name }}@${{ steps.plan.outputs.version }} latest"
+          echo "::error::   2. then register this workflow as its trusted publisher:"
+          echo "::error::        npm trust github ${{ steps.plan.outputs.name }} --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish -y"
+          exit 1
+
+      # npm accepts dist-tag writes from a token only, and this workflow has
+      # none, so a prerelease must not be published while no `latest` exists:
+      # the bare package name would install nothing at all.
+      - name: Refuse to publish something nobody can install
+        if: steps.plan.outputs.latest_missing == 'true' && (github.ref_type == 'tag' || inputs.dry_run == false)
         run: |
           set -euo pipefail
-          if [ -n "${NPM_TOKEN:-}" ]; then
-            echo "mode=token" >> "$GITHUB_OUTPUT"
-            echo "publishing with the NPM_TOKEN repository secret"
-          else
-            echo "mode=oidc" >> "$GITHUB_OUTPUT"
-            echo "publishing with npm trusted publishing (OIDC)"
-          fi
+          spec="${{ steps.plan.outputs.name }}@${{ steps.plan.outputs.version }}"
+          echo "::error::${spec} is a prerelease and the registry has no latest tag, so 'npm install ${{ steps.plan.outputs.name }}' would resolve to nothing."
+          echo "::error::Trusted publishing cannot write dist-tags. Either point latest at a version yourself (npm dist-tag add <pkg>@<version> latest, with 2FA), or release a stable version instead."
+          exit 1
 
-      # A manual run exercises the whole publish path, including the tarball and
-      # the dist-tag decision, without touching the registry.
+      # A manual run exercises the whole publish path — the tarball, the
+      # registry state, the tag — without touching the registry.
       - name: Publish (dry run)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: |
           npm publish "${{ steps.tarball.outputs.tarball }}" \
             --dry-run --access public --tag "${{ steps.plan.outputs.dist_tag }}"
 
-      - name: Publish with the repository token
-        if: steps.auth.outputs.mode == 'token' && (github.ref_type == 'tag' || inputs.dry_run == false)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          npm publish "${{ steps.tarball.outputs.tarball }}" \
-            --access public --tag "${{ steps.plan.outputs.dist_tag }}"
-
       - name: Publish with OIDC trusted publishing
-        if: steps.auth.outputs.mode == 'oidc' && (github.ref_type == 'tag' || inputs.dry_run == false)
+        if: github.ref_type == 'tag' || inputs.dry_run == false
         run: |
           set -euo pipefail
           if npm publish "${{ steps.tarball.outputs.tarball }}" \
@@ -262,26 +278,10 @@ jobs:
           # A provenance signature proves the build, not that npm authorized the
           # upload; an unauthorized OIDC publish fails as a bare 404.
           echo "::error::npm rejected the OIDC publish. Check, in order:"
-          echo "::error::  1. the package exists on npm — the first publish needs NPM_TOKEN or a local npm publish, because npm only accepts a trusted publisher for a package that already exists"
+          echo "::error::  1. the package exists on npm — a trusted publisher can only be configured for a package that already exists"
           echo "::error::  2. the trusted publisher is registered: npm trust github ${{ steps.plan.outputs.name }} --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish"
           echo "::error::  3. package.json repository.url matches this repository exactly"
           exit 1
-
-      # npm accepts dist-tag writes only from a token, so a first publish must
-      # have gone through NPM_TOKEN. By the time OIDC publishes, the package
-      # exists and normally already owns `latest`.
-      - name: Point latest at a prerelease that has no latest yet
-        if: steps.plan.outputs.also_latest == 'true' && (github.ref_type == 'tag' || inputs.dry_run == false)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-          spec="${{ steps.plan.outputs.name }}@${{ steps.plan.outputs.version }}"
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::warning::${spec} is published under ${{ steps.plan.outputs.dist_tag }} but the registry still has no latest tag, so the bare package name does not install yet. Set it with a token: npm dist-tag add ${spec} latest"
-            exit 0
-          fi
-          npm dist-tag add "${spec}" latest
 
       - name: Verify what the registry now serves
         if: github.ref_type == 'tag' || inputs.dry_run == false

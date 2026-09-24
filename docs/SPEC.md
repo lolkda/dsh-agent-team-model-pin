@@ -230,8 +230,10 @@ settings 命名空间 `agent-team-model-pin`：`{ sessions: { "<sessionId>": { p
 - `verify` 与 `publish` 之间用 artifact 传递 tarball；`publish` 只发布该 tarball，不重新构建。发布 tarball 时 npm 不执行生命周期脚本，因此「验证过的字节」与「发出去的字节」相同。传给 `npm publish` 的 tarball 路径必须是**绝对路径**：`release-artifact/pkg.tgz` 这种两段相对路径会被 npm 解析成 `owner/repo` 形式的 git 简写并去 `git ls-remote`，报出与发布无关的权限错误。预发布版本还必须显式给 `--tag`，否则 npm 直接拒绝发布。
 - DSH runtime 版本**不得写死在 workflow 或文档命令里**：必须从 `package.json` 的 `devDependencies["@deepseek-ai/dsh-agent"]` 读出，且必须与 `peerDependencies` 的声明一致，否则失败。写死会让门禁与实际发布的包对不上（本仓库曾因此用 0.1.6-alpha.2 的门禁验证 0.1.7-rc.1 的包）。
 - 打包契约：tarball 必须含 `dist/index.js`、`dist/index.d.ts`、`dist/web.js`、`dist/client.js`、`cordis.patch.yml`、`README.md`、`LICENSE`，且不得含 `src/`、`tests/`、`docs/`。
-- dist-tag：正式版 → `latest`；预发布 → `next`；仅当 registry 尚无 `latest` 时，预发布同时把 `latest` 指向自己（否则 `npm install <包名>` 解析不到）。判定由 `scripts/release-plan.mjs` 的纯函数 `planRelease` 完成，回归在 `tests/release.test.mjs`。registry 读取失败但不是 404 时必须中止，不得当作「尚未发布」。
-- 凭据：首次发布必须使用仓库 secret `NPM_TOKEN`（npm 只允许为已存在的包登记 trusted publisher，OIDC 无法创建包）；登记后改走 OIDC `npm publish --provenance`。`npm dist-tag add` 只接受 token，不覆盖 OIDC。
+- dist-tag：正式版 → `latest`；预发布 → `next`。判定由 `scripts/release-plan.mjs` 的纯函数 `planRelease` 完成，回归在 `tests/release.test.mjs`。registry 读取失败但不是 404 时必须中止，不得当作「尚未发布」。
+- 凭据：只用 **npm trusted publishing（OIDC）** + `npm publish --provenance`，仓库不保存长期令牌，workflow 不得读取任何 secret。本账号写操作强制 2FA，token 发布会被 npm 拒绝（`EOTP`），`npm publish` / `npm dist-tag add` / `npm trust` 实测都要求 OTP，所以不存在 token 回退路径。
+- 两个 npm 侧前提只能由维护者带 2FA 在 CI 之外一次性完成：① 包必须已存在（`npm trust` 的 Prerequisites 明确要求 “Package must exist”，新包 staged publish 同样 404），首次发布手工上传门禁产出的 tarball 并补 `latest`；② `npm trust github <pkg> --repo lolkda/dsh-agent-team-model-pin --file release.yml --allow-publish` 登记本 workflow。
+- `publish` 在上传**之前**做两个前置检查并在不满足时中止：包不存在（`first_publish`）→ 打印上面那份 bootstrap 步骤；预发布但 registry 无 `latest`（`latest_missing`）→ 拒绝发布，因为 trusted publishing 覆盖不了 `npm dist-tag add`，发出去就没人能按包名安装。
 
 
 ## 7. 验收

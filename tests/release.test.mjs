@@ -81,11 +81,34 @@ test('release: the publish job publishes the tarball the verify job built', () =
   assert.ok(/tarball="\$\(realpath /.test(publishJob),
     'the tarball path must be absolute: npm reads a two-segment relative path as the owner/repo git shorthand and runs `git ls-remote` instead of publishing the file');
   const specs = [...release.matchAll(/npm publish "([^"]+)"/g)].map((match) => match[1]);
-  assert.equal(specs.length, 3, 'each publish path (dry run, token, OIDC) must name its tarball');
+  assert.equal(specs.length, 2, 'each publish path (dry run, trusted publishing) must name its tarball');
   for (const spec of specs) {
     assert.ok(spec.includes('steps.tarball.outputs.tarball'),
       `a publish step names ${spec} instead of the tarball the verify job built`);
   }
+});
+
+test('release: publishing needs no long-lived token', () => {
+  assert.ok(!/secrets\./.test(release),
+    'a 2FA-protected account cannot publish from CI with a token (npm answers EOTP), so the release must not read a token secret');
+  assert.ok(/id-token: write/.test(release), 'trusted publishing and provenance need the OIDC token');
+  assert.ok(/--provenance/.test(release), 'the published tarball must carry its build attestation');
+});
+
+test('release: a package that does not exist stops the release with the bootstrap steps', () => {
+  const publishJob = release.slice(release.indexOf('\n  publish:'));
+  assert.ok(/npm trust github/.test(publishJob),
+    'the failure has to name the trusted publisher registration, because npm only accepts one for a package that already exists');
+  assert.ok(/first_publish == 'true'/.test(publishJob),
+    'the check must key off the plan rather than failing later with npm\'s bare 404');
+});
+
+test('release: a prerelease stops before publishing while the bare name would install nothing', () => {
+  const publishJob = release.slice(release.indexOf('\n  publish:'));
+  const guard = publishJob.indexOf('latest_missing');
+  const publish = publishJob.indexOf('Publish with OIDC');
+  assert.ok(guard !== -1 && guard < publish,
+    'trusted publishing cannot write dist-tags, so the refusal must run before the upload, not after it');
 });
 
 test('release: a tag must name the version in package.json', () => {
@@ -101,25 +124,24 @@ test('release: a manual run is a dry run unless dry_run is turned off', () => {
 test('release-plan: a prerelease with a live latest tag never moves latest', () => {
   const plan = planRelease({ version: '1.3.0-rc.1', existingTags: { latest: '1.2.3', next: '1.2.4-rc.1' } });
   assert.equal(plan.distTag, 'next');
-  assert.equal(plan.alsoLatest, false);
+  assert.equal(plan.latestMissing, false);
 });
 
 test('release-plan: a stable version publishes to latest and does not touch next', () => {
   const plan = planRelease({ version: '1.3.0', existingTags: { latest: '1.2.3', next: '1.3.0-rc.1' } });
   assert.equal(plan.distTag, 'latest');
-  assert.equal(plan.alsoLatest, false);
+  assert.equal(plan.latestMissing, false);
 });
 
-test('release-plan: the first publish of a prerelease also claims latest', () => {
-  const plan = planRelease({ version: '1.3.0-rc.1', existingTags: {} });
-  assert.equal(plan.distTag, 'next');
-  assert.equal(plan.alsoLatest, true,
-    'a package whose bare name cannot be installed is a worse first release than a prerelease on latest');
-});
-
-test('release-plan: a prerelease after a lost latest tag repairs the bare-name install', () => {
+test('release-plan: a prerelease with no latest anywhere is flagged, because trusted publishing cannot set dist-tags', () => {
   const plan = planRelease({ version: '1.3.0-rc.1', existingTags: { next: '1.3.0-rc.1' } });
-  assert.equal(plan.alsoLatest, true);
+  assert.equal(plan.latestMissing, true);
+});
+
+test('release-plan: a first publish is flagged as needing the manual bootstrap', () => {
+  const plan = planRelease({ version: '1.3.0-rc.1', existingTags: {} });
+  assert.equal(plan.firstPublish, true, 'npm only accepts a trusted publisher for a package that already exists');
+  assert.equal(plan.latestMissing, true);
 });
 
 test('release-plan: the plan describes the version package.json declares', () => {
@@ -139,7 +161,7 @@ test('release-plan CLI: a package npm cannot find is a first publish under next'
   assert.equal(plan.distTag, 'next');
   assert.equal(plan.firstPublish, true);
   assert.match(outputs, /^dist_tag=next$/m);
-  assert.match(outputs, /^also_latest=true$/m);
+  assert.match(outputs, /^latest_missing=true$/m);
 });
 
 test('release-plan CLI: live dist-tags decide the tag and the latest repair', async (t) => {
@@ -147,10 +169,10 @@ test('release-plan CLI: live dist-tags decide the tag and the latest repair', as
   const { out, outputs } = await runCli();
   const plan = JSON.parse(out);
   assert.equal(plan.distTag, 'next');
-  assert.equal(plan.alsoLatest, false);
+  assert.equal(plan.latestMissing, false);
   assert.equal(plan.firstPublish, false);
   assert.deepEqual(plan.existingTags, { latest: '1.2.3', next: '1.2.4-rc.1' });
-  assert.match(outputs, /^also_latest=false$/m);
+  assert.match(outputs, /^latest_missing=false$/m);
 });
 
 test('release-plan CLI: a registry failure that is not a 404 fails instead of guessing', async (t) => {
