@@ -26,10 +26,13 @@ import {
   resolvePin,
 } from './pin.ts';
 import type { CommandPlan, LlmLike, Pin, Scope } from './pin.ts';
-import type { Context } from '@deepseek-ai/cordis';
+import type { Context, Volatile } from '@deepseek-ai/cordis';
 import { installTeamModelSync } from './selection-sync.ts';
 
-/** settings 命名空间（SPEC 5.4）。 */
+/**
+ * settings 命名空间 = Loader 入口 id（SPEC 5.4 的 rc.1 形态）。
+ * `cordis.patch.yml` 用的就是这个 id，也是 `entryId()` 在 fiber 不可用时的回退值。
+ */
 const SETTINGS_NS = 'agent-team-model-pin';
 
 /** 配置 scope 的合法取值（SPEC 4 · R1）。 */
@@ -75,34 +78,27 @@ interface LlmCallConfigLike {
 /** settings 段落内的 per-session 钉表。 */
 type PinDict = Record<string, Pin>;
 
-/** settings 段落值（SPEC 5.4）。 */
-interface SettingsValue {
-  sessions?: PinDict;
-  /** Read-only composition metadata consumed from SettingsNamespaceView.base. */
-  defaults?: Pin;
-  configuredSessions?: PinDict;
-  scope?: Scope;
+/** One redacted settings form descriptor as the rc.1 service describes it. */
+interface SettingsDescriptorLike {
+  ns: string;
+  base?: unknown;
+  user?: unknown;
+  value?: unknown;
+  revision?: number;
 }
 
-/** `setSource` 收到的同步读取 thunk。 */
-type SettingsSource = () => SettingsValue;
-
-/** settings 段落 hooks（仅用到 setSource / onChange）。 */
-interface SettingsHooks {
-  setSource(current: SettingsSource): void;
-  onChange(): void;
-}
-
-/** `ctx.settings` 用到的两个方法。 */
+/**
+ * The rc.1 `ctx.settings` surface this plugin uses.
+ *
+ * DSH 0.1.7-rc.1 replaced the per-plugin `installSection` registration with
+ * schema-derived configuration forms: a plugin's exported `Config` is the form,
+ * the profile entry id is the namespace, and only `volatile` fields are
+ * projected and writable at runtime. `describe()` is synchronous and
+ * `mutate()` writes path-addressed edits into the profile entry.
+ */
 interface SettingsLike {
-  installSection(
-    owner: PluginCtx,
-    ns: string,
-    schema: unknown,
-    entry: SettingsValue,
-    hooks: SettingsHooks,
-  ): void;
-  mutate(ns: string, ops: readonly unknown[]): Promise<void>;
+  describe?(): SettingsDescriptorLike[];
+  mutate(ns: string, ops: readonly unknown[], expectedRevision?: number): Promise<void>;
 }
 
 /** 命令结果（SPEC 3）。 */
@@ -138,6 +134,8 @@ interface PluginCtx {
   get(name: string): unknown;
   on(event: string, listener: RequestListener): () => void;
   effect(callback: () => unknown): unknown;
+  /** Loader fiber owning this plugin; its entry id is the rc.1 settings namespace. */
+  fiber?: { entry?: { options?: { id?: string } } };
 }
 
 /** 归一化后的插件配置（SPEC 5.3）。 */
@@ -165,23 +163,95 @@ interface AuditRecord {
   to: AuditRoute;
 }
 
-/** settings 段落的 schema：`{ sessions: { "<sessionId>": { provider?, model?, reasoningEffort? } } }`。 */
-const PIN_SCHEMA = z.object({
-  provider: z.string(),
-  model: z.string(),
-  reasoningEffort: z.string(),
-  followLeader: z.boolean(),
-  modelDefault: z.boolean(),
-});
-const SETTINGS_SCHEMA = z.object({
-  sessions: z.dict(PIN_SCHEMA),
-  defaults: PIN_SCHEMA,
-  configuredSessions: z.dict(PIN_SCHEMA),
-  scope: z.string(),
+/**
+ * One session-keyed pin as stored in configuration (all fields optional).
+ */
+interface PinConfig {
+  provider?: string;
+  model?: string;
+  reasoningEffort?: string;
+  followLeader?: boolean;
+  modelDefault?: boolean;
+}
+
+/**
+ * Resolved shape of this plugin's configuration.
+ *
+ * `Volatile` is the public cordis reference type: the Loader keeps one live
+ * reference per volatile field and commits settings writes into it in place, so
+ * the plugin reads the current value without being remounted. `Config` below is
+ * the schema that produces it, and `apply` reads its fields through this key set.
+ */
+export interface PluginConfig {
+  scope: Volatile<string | undefined>;
+  defaults: Volatile<PinConfig | undefined>;
+  sessions: Volatile<Record<string, PinConfig> | undefined>;
+  auditPath: string;
+}
+
+/**
+ * One session-keyed pin entry. The fields stay ordinary; the *owning* node is
+ * volatile, which is the unit rc.1 projects into a form and commits in place.
+ */
+function pinSchema(): ReturnType<typeof z.object> {
+  return z.object({
+    provider: z.string(),
+    model: z.string(),
+    reasoningEffort: z.string(),
+    followLeader: z.boolean(),
+    modelDefault: z.boolean(),
+  });
+}
+
+/**
+ * The plugin's rc.1 configuration schema.
+ *
+ * DSH 0.1.7-rc.1 derives a plugin's settings form from this export: only
+ * `volatile` fields appear in the form, are writable through
+ * `settings.mutate`/`remote.settings.mutate`, and are committed into the
+ * running fiber without a remount. The profile entry id declared by
+ * `cordis.patch.yml` (`agent-team-model-pin`) is the settings namespace, so the
+ * `sessions` dict here is both the composition layer and the runtime store.
+ * `auditPath` stays ordinary configuration: it is deployment-owned and never
+ * edited by the model menu.
+ *
+ * Each volatile node owns a fresh schema instance because schemastery refuses
+ * a volatile node nested inside another one.
+ */
+export const Config = z.object({
+  scope: z.string().volatile(),
+  defaults: pinSchema().volatile(),
+  sessions: z.dict(pinSchema()).volatile(),
+  auditPath: z.string(),
 });
 
-/** 段落的 Composition 基准层（空 → 未设置任何运行期钉）。 */
-const SETTINGS_ENTRY: SettingsValue = { sessions: {} };
+/** `isVolatile` from @deepseek-ai/cosmokit: a globally keyed reference protocol. */
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write');
+
+/**
+ * Whether one resolved config field is a cordis volatile reference.
+ * Reads the reference protocol symbol directly so no extra runtime dependency
+ * is added and ESM/CJS copies of cosmokit still agree.
+ * @param value Candidate config field.
+ * @returns Whether `value` exposes the volatile read/write protocol.
+ */
+function isConfigRef(value: unknown): value is { get(): unknown } {
+  return value !== null && typeof value === 'object' && VOLATILE_WRITE in value
+    && typeof (value as { get?: unknown }).get === 'function';
+}
+
+/**
+ * Read one resolved config field, live.
+ *
+ * A Loader-resolved config carries volatile references; a plain object (unit
+ * tests, direct `apply` calls) carries the value itself. Volatile references
+ * are read on every call, so a settings write is visible without a remount.
+ * @param field Config field as received by `apply`.
+ * @returns The current value, or undefined when unset.
+ */
+function configValue(field: unknown): unknown {
+  return isConfigRef(field) ? field.get() : field;
+}
 
 /** 把任意异常压成一句可展示的文本。 */
 function errorText(error: unknown): string {
@@ -252,19 +322,28 @@ export function apply(ctx: PluginCtx, config: unknown): void {
 
   /* ---------- 1. 配置归一化：非法值只告警一次，绝不抛 ---------- */
 
-  const raw = config !== null && typeof config === 'object' ? (config as Record<string, unknown>) : {};
+  // The Loader hands over the schema-resolved config (volatile fields are
+  // references); a direct `apply` call may hand over plain values instead.
+  const raw: Partial<Record<keyof PluginConfig, unknown>> =
+    config !== null && typeof config === 'object' ? (config as Record<string, unknown>) : {};
 
-  let scope: Scope = DEFAULT_SCOPE;
-  if (raw.scope !== undefined) {
-    if (typeof raw.scope === 'string' && (SCOPES as readonly string[]).includes(raw.scope)) {
-      scope = raw.scope as Scope;
-    } else {
-      warnOnce(
-        'scope',
-        `agent-team-model-pin: 配置 scope 非法（期望 ${SCOPES.join(' | ')}），已回退为 ${DEFAULT_SCOPE}`,
-      );
+  /**
+   * Effective scope, read live. A volatile `scope` field can be rewritten by a
+   * settings write, so the value is resolved per call instead of captured.
+   * @returns The configured scope, or the documented default when absent/invalid.
+   */
+  const liveScope = (): Scope => {
+    const configured = configValue(raw.scope);
+    if (configured === undefined) return DEFAULT_SCOPE;
+    if (typeof configured === 'string' && (SCOPES as readonly string[]).includes(configured)) {
+      return configured as Scope;
     }
-  }
+    warnOnce(
+      'scope',
+      `agent-team-model-pin: 配置 scope 非法（期望 ${SCOPES.join(' | ')}），已回退为 ${DEFAULT_SCOPE}`,
+    );
+    return DEFAULT_SCOPE;
+  };
 
   const safeNormalize = (value: unknown, key: string, label: string): Pin | undefined => {
     if (value === undefined || value === null) return undefined;
@@ -282,69 +361,58 @@ export function apply(ctx: PluginCtx, config: unknown): void {
     }
   };
 
-  const defaults = safeNormalize(raw.defaults, 'defaults', 'defaults');
-
-  const sessions: PinDict = {};
-  if (raw.sessions !== undefined && raw.sessions !== null) {
-    if (typeof raw.sessions !== 'object' || Array.isArray(raw.sessions)) {
-      warnOnce('sessions', 'agent-team-model-pin: 配置 sessions 非法（期望以 sessionId 为键的对象），该层按空处理');
-    } else {
-      for (const [sessionId, value] of Object.entries(raw.sessions as Record<string, unknown>)) {
-        if (sessionId.trim().length === 0) {
-          warnOnce('sessions-key', 'agent-team-model-pin: 配置 sessions 存在空 sessionId，已忽略该条');
-          continue;
-        }
-        const pin = safeNormalize(value, 'sessions-value', `sessions["${sessionId}"]`);
-        if (pin !== undefined) sessions[sessionId] = pin;
-      }
+  /** Normalize one session-keyed layer; malformed entries are dropped, never thrown. */
+  const safeNormalizeSessions = (value: unknown, key: string, label: string): PinDict => {
+    const out: PinDict = {};
+    if (value === undefined || value === null) return out;
+    if (typeof value !== 'object' || Array.isArray(value)) {
+      warnOnce(key, `agent-team-model-pin: 配置 ${label} 非法（期望以 sessionId 为键的对象），该层按空处理`);
+      return out;
     }
-  }
+    for (const [sessionId, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (sessionId.trim().length === 0) {
+        warnOnce(`${key}-key`, `agent-team-model-pin: 配置 ${label} 存在空 sessionId，已忽略该条`);
+        continue;
+      }
+      const pin = safeNormalize(entry, `${key}-value`, `${label}["${sessionId}"]`);
+      if (pin !== undefined) out[sessionId] = pin;
+    }
+    return out;
+  };
+
+  /** Effective defaults, read live from the resolved entry config. */
+  const liveDefaults = (): Pin | undefined => safeNormalize(configValue(raw.defaults), 'defaults', 'defaults');
+
+  /**
+   * Effective per-session store, read live.
+   *
+   * In rc.1 the Loader-resolved entry config already merges the composition
+   * layer with the profile override, so this single read is the effective layer
+   * and a settings write is visible on the very next prompt assembly.
+   */
+  const liveSessions = (): PinDict => safeNormalizeSessions(configValue(raw.sessions), 'sessions', 'sessions');
 
   let auditPath = defaultAuditPath();
-  if (raw.auditPath !== undefined && raw.auditPath !== null) {
-    if (typeof raw.auditPath === 'string') {
-      const trimmed = raw.auditPath.trim();
+  const configuredAuditPath = configValue(raw.auditPath);
+  if (configuredAuditPath !== undefined && configuredAuditPath !== null) {
+    if (typeof configuredAuditPath === 'string') {
+      const trimmed = configuredAuditPath.trim();
       if (trimmed.length > 0) auditPath = trimmed;
     } else {
       warnOnce('auditPath', `agent-team-model-pin: 配置 auditPath 非法（期望字符串），已回退为 ${defaultAuditPath()}`);
     }
   }
 
-  /* ---------- 2. settings 段落：setSource 保存同步可读 thunk ---------- */
+  /* ---------- 2. rc.1 settings：入口配置即运行期存储 ---------- */
 
-  let liveSource: SettingsSource = () => SETTINGS_ENTRY;
-
-  ctx.inject(['settings'], (settingsCtx) => {
-    try {
-      settingsCtx.settings.installSection(ctx, SETTINGS_NS, SETTINGS_SCHEMA, {
-        ...SETTINGS_ENTRY, defaults: defaults ?? {}, configuredSessions: sessions, scope,
-      }, {
-        setSource: (current: SettingsSource) => {
-          liveSource = current;
-        },
-        onChange: () => {
-          /* 每次请求都重新调用 thunk 读取，无需在此缓存 */
-        },
-      });
-    } catch (error) {
-      warnOnce(
-        'settings-install',
-        `agent-team-model-pin: settings 段落安装失败，运行期层不可用（Composition 层仍生效）：${errorText(error)}`,
-      );
-    }
-  });
-
-  /** 同步读取运行期层；任何异常都退化为「无该层」，绝不打断请求。 */
-  const readLiveSessions = (): PinDict => {
-    try {
-      const value = liveSource();
-      const live = value !== null && typeof value === 'object' ? value.sessions : undefined;
-      if (live === undefined || live === null || typeof live !== 'object' || Array.isArray(live)) return {};
-      return live as PinDict;
-    } catch (error) {
-      warnOnce('settings-read', `agent-team-model-pin: 读取运行期 settings 失败，本层按空处理：${errorText(error)}`);
-      return {};
-    }
+  /**
+   * The rc.1 settings namespace is the Loader entry id that owns this plugin.
+   * `cordis.patch.yml` declares `agent-team-model-pin`, so the fallback keeps a
+   * deployment that mounts the plugin without a profile patch addressable.
+   */
+  const entryId = (): string => {
+    const id = ctx.fiber?.entry?.options?.id;
+    return typeof id === 'string' && id.length > 0 ? id : SETTINGS_NS;
   };
 
   const settingsService = (): SettingsLike | undefined => {
@@ -352,20 +420,52 @@ export function apply(ctx: PluginCtx, config: unknown): void {
     return found !== null && typeof found === 'object' ? (found as SettingsLike) : undefined;
   };
 
+  /**
+   * The service's synchronous view of this plugin's own settings entry.
+   * `base` is the composition layer beneath the profile override and `user` is
+   * the stored override; both are absent on a deployment without a configurable
+   * profile entry, which degrades the layer display instead of failing.
+   */
+  const descriptor = (): SettingsDescriptorLike | undefined => {
+    const settings = settingsService();
+    if (settings === undefined || typeof settings.describe !== 'function') return undefined;
+    try {
+      const list = settings.describe();
+      if (!Array.isArray(list)) return undefined;
+      const id = entryId();
+      return list.find((item) => item !== null && typeof item === 'object' && item.ns === id);
+    } catch (error) {
+      warnOnce('settings-describe', `agent-team-model-pin: 读取 settings 描述失败：${errorText(error)}`);
+      return undefined;
+    }
+  };
+
+  /** Composition baseline (the layer the runtime pins override), when describable. */
+  const composition = (): { sessions: PinDict; defaults: Pin | undefined } | undefined => {
+    const item = descriptor();
+    if (item === undefined) return undefined;
+    const base = item.base !== null && typeof item.base === 'object' && !Array.isArray(item.base)
+      ? (item.base as Record<string, unknown>) : {};
+    return {
+      sessions: safeNormalizeSessions(base.sessions, 'composition-sessions', 'Composition.sessions'),
+      defaults: safeNormalize(base.defaults, 'composition-defaults', 'Composition.defaults'),
+    };
+  };
+
   const llmService = (): LlmLike | undefined => {
     const found = ctx.get('llm');
     return found !== null && typeof found === 'object' ? (found as unknown as LlmLike) : undefined;
   };
 
-  /* ---------- 3. 三层解析（就近优先）与审计 ---------- */
+  /* ---------- 3. 就近优先解析与审计 ---------- */
 
   const effectivePin = (sessionId: string, role?: Role): Pin | undefined => {
     try {
       return resolveLayer({
-        scope,
-        defaults,
-        configSessions: sessions,
-        liveSessions: readLiveSessions(),
+        scope: liveScope(),
+        defaults: liveDefaults(),
+        configSessions: liveSessions(),
+        liveSessions: {},
         sessionId,
         role,
       });
@@ -381,16 +481,17 @@ export function apply(ctx: PluginCtx, config: unknown): void {
    * 命令文本回答的是「这个 session 上有没有钉」，而不是「敲命令的人自己被不被钉」：
    * 例如 scope=teammates 时 Lead 敲 `/team-model show|clear`，被描述的对象是本会话的队友。
    * @param sessionId 作用键。
-   * @param includeLive 是否包含运行期层。
-   * @returns 三层合并结果（role 无关）。
+   * @param includeLive true → 有效层（Composition ∪ 运行期）；false → 仅 Composition 基线。
+   * @returns 合并结果（role 无关）。
    */
   const sessionKeyPin = (sessionId: string, includeLive: boolean): Pin | undefined => {
     try {
+      const baseline = includeLive ? undefined : composition();
       return resolveLayer({
         scope: 'all',
-        defaults,
-        configSessions: sessions,
-        liveSessions: includeLive ? readLiveSessions() : {},
+        defaults: includeLive ? liveDefaults() : baseline?.defaults,
+        configSessions: includeLive ? liveSessions() : baseline?.sessions ?? {},
+        liveSessions: {},
         sessionId,
       });
     } catch (error) {
@@ -427,16 +528,20 @@ export function apply(ctx: PluginCtx, config: unknown): void {
   /* ---------- 4. 命令 /team-model ---------- */
 
   const describeLayers = (sessionId: string, role?: Role): string => {
-    const live = readLiveSessions()[sessionId];
+    const effective = liveSessions();
+    const baseline = composition();
     return [
       `作用键（Lead 会话 id）：${sessionId}${role === undefined ? '' : `（调用方 role=${role}）`}`,
-      `scope：${scope}`,
+      `scope：${liveScope()}`,
       `该作用键上的钉（不按 role 过滤）= ${describePin(sessionKeyPin(sessionId, true))}`,
       `调用方自身生效钉= ${describePin(effectivePin(sessionId, role))}`,
-      `运行期层（settings）= ${describePin(live)}`,
-      `Composition 层 sessions= ${describePin(sessions[sessionId])}`,
-      `Composition 层 defaults=${describePin(defaults)}`,
+      `运行期层（settings）= ${describePin(effective[sessionId])}`,
+      baseline === undefined
+        ? `Composition 层= 不可用（本部署未提供 settings 描述：无 profile 配置入口）`
+        : `Composition 层 sessions= ${describePin(baseline.sessions[sessionId])}`,
+      ...(baseline === undefined ? [] : [`Composition 层 defaults=${describePin(baseline.defaults)}`]),
       '解析顺序（就近优先）：运行期 > Composition.sessions > Composition.defaults，且为字段级合并。',
+      '说明：rc.1 把运行期钉写进本插件的 profile 入口配置（命名空间 agent-team-model-pin）；clear 只撤销该覆盖，Composition 基线随之重新生效。',
     ].join('\n');
   };
 
@@ -478,7 +583,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
           }
           const effective = effectivePin(sessionId, role);
           const notes: string[] = [`当前会话生效钉：${describePin(effective)}`, describeLayers(sessionId, role)];
-          if (scope === DEFAULT_SCOPE && role === 'lead') {
+          if (liveScope() === DEFAULT_SCOPE && role === 'lead') {
             notes.push(
               `注意：scope=${DEFAULT_SCOPE} 只对队友生效，Lead 自身不会被钉住；本会话的队友使用「该作用键上的钉」：${describePin(sessionPin)}`,
             );
@@ -517,7 +622,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
             return { kind: 'error', text: `校验失败，未写入任何状态：${errorText(error)}` };
           }
           try {
-            await settings.mutate(SETTINGS_NS, [mutationFor(plan, sessionId)]);
+            await settings.mutate(entryId(), [mutationFor(plan, sessionId)]);
           } catch (error) {
             return { kind: 'error', text: `写入运行期钉失败：${errorText(error)}` };
           }
@@ -525,24 +630,24 @@ export function apply(ctx: PluginCtx, config: unknown): void {
             kind: 'success',
             text: [
               `已设置本会话（${sessionId}）运行期钉：${describePin(pin)}`,
-              `scope=${scope}${scope === DEFAULT_SCOPE && role === 'lead' ? '（只作用于队友，Lead 自身不受影响）' : ''}`,
+              `scope=${liveScope()}${liveScope() === DEFAULT_SCOPE && role === 'lead' ? '（只作用于队友，Lead 自身不受影响）' : ''}`,
               '下一次提示词组装时生效；本步重试沿用同一选择，已存在的队友无需重建。',
             ].join('\n'),
           };
         }
 
         try {
-          await settings.mutate(SETTINGS_NS, [mutationFor(plan, sessionId)]);
+          await settings.mutate(entryId(), [mutationFor(plan, sessionId)]);
         } catch (error) {
           return { kind: 'error', text: `清除运行期钉失败：${errorText(error)}` };
         }
-        const composition = sessionKeyPin(sessionId, false);
+        const baseline = sessionKeyPin(sessionId, false);
         return {
           kind: 'success',
           text:
-            composition === undefined
+            baseline === undefined
               ? `已清除本会话（${sessionId}）的运行期钉；当前无生效钉。`
-              : `已清除本会话（${sessionId}）的运行期钉；但该作用键仍被组合配置钉住：${describePin(composition)}（来自 Composition 层，需改组合配置才能解除）。`,
+              : `已清除本会话（${sessionId}）的运行期钉；但该作用键仍被组合配置钉住：${describePin(baseline)}（来自 Composition 层，需改组合配置才能解除）。`,
         };
       },
     }),

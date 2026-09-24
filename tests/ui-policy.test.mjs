@@ -119,16 +119,33 @@ test('UI: rejected settings writes never report success', async () => {
 
 test('UI: effective state uses immutable composition base and the current session only', () => {
   assert.equal(typeof ui?.readTeamPin, 'function');
-  const view = { base: { scope: 'teammates', defaults: { provider: 'p', model: 'm' } },
-    value: { defaults: { provider: 'wrong', model: 'wrong' }, sessions: { A: { followLeader: true }, B: { reasoningEffort: 'low' } } } };
+  // rc.1 的 namespace view：base = Composition 基线（scope/defaults/sessions），
+  // value = 解析后的层（Composition ∪ profile 覆盖）。
+  const view = { base: { scope: 'teammates', defaults: { provider: 'p', model: 'm' }, sessions: {} },
+    value: { scope: 'all', defaults: { provider: 'wrong', model: 'wrong' }, sessions: { A: { followLeader: true }, B: { reasoningEffort: 'low' } } } };
   assert.deepEqual(ui.readTeamPin(view, 'A'), { followLeader: true });
   assert.deepEqual(ui.readTeamPin(view, 'B'), { provider: 'p', model: 'm', reasoningEffort: 'low' });
 });
 
- test('UI: root scope is taken from Team view, never a teammate id', () => {
+test('UI: a composition pin in base.sessions is honored when the resolved layer omits it', () => {
+  assert.equal(typeof ui?.readTeamPin, 'function');
+  const view = { base: { scope: 'teammates', defaults: {}, sessions: { A: { provider: 'base', model: 'base-model' } } },
+    value: { sessions: {} } };
+  assert.deepEqual(ui.readTeamPin(view, 'A'), { provider: 'base', model: 'base-model' });
+  assert.equal(ui.readTeamPin(view, 'B'), undefined);
+});
+
+ test('UI: root scope is taken from the durable subagent address, never a teammate id', () => {
   assert.equal(typeof ui?.teamSessionKey, 'function');
-  assert.equal(ui.teamSessionKey('child', { members: [{ id: 'lead', role: 'lead' }, { id: 'child', role: 'teammate' }] }), 'lead');
-  assert.equal(ui.teamSessionKey('ordinary', { members: [] }), 'ordinary');
+  // DSH 0.1.7-rc.1 removed the client `remote.agentTeams` namespace; the Team
+  // root key now comes from the client Session face's durable direct-parent
+  // address, exactly as the shipped Agent Team UI derives it.
+  const face = (parentSessionId) => ({ getSnapshot: () => ({ subagent: parentSessionId === undefined ? undefined : { address: { parentSessionId, childSessionId: 'child', mode: 'continuable' } } }) });
+  const sessions = { binding: (id) => ({ session: face(id === 'child' ? 'lead' : undefined) }) };
+  assert.equal(ui.teamSessionKey('child', sessions), 'lead');
+  assert.equal(ui.teamSessionKey('ordinary', sessions), 'ordinary');
+  assert.equal(ui.teamSessionKey('unknown', { binding: () => undefined }), 'unknown');
+  assert.equal(ui.teamSessionKey('broken', { binding: () => ({ session: { getSnapshot: () => { throw new Error('gone'); } } }) }), 'broken');
 });
 
  test('UI: late responses from a previous session are ignored', () => {

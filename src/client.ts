@@ -4,12 +4,12 @@ import { ModelPicker } from './model-picker.ts';
 import { applyTeamPin } from './pin.ts';
 import type { Pin } from './pin.ts';
 import {
-  SETTINGS_NS, buildMenu, choiceId, effortPin, findModel, isCurrentRequest,
+  CLIENT_VERSION, SETTINGS_NS, buildMenu, choiceId, effortPin, findModel, isCurrentRequest,
   modelPin, readTeamPin, teamSessionKey, writeTeamPin,
 } from './ui-state.ts';
 import type {
   MenuCopy, NamespaceView, ProviderGroup, RequestKey,
-  Result, Selection, SettingsRemote, TeamView,
+  Result, Selection, SessionsLike, SettingsRemote,
 } from './ui-state.ts';
 
 interface DirectoryState {
@@ -26,7 +26,9 @@ interface Directory {
 }
 interface ClientContext {
   modelDirectories: { directoryFor(sessionId: string): Directory };
-  remote: SettingsRemote & { agentTeams: { view(sessionId: string): Promise<Result<TeamView>> } };
+  /** DSH 0.1.7-rc.1 client Session catalog; owns the durable subagent address. */
+  sessions: SessionsLike;
+  remote: SettingsRemote;
   locale: {
     register(ns: string, dictionaries: Record<string, Record<string, string>>): () => void;
     bind(ns: string): (key: string) => string;
@@ -62,8 +64,8 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 
 // The facade and EACH RPC namespace are independently guarded Cordis services.
 // Native ModelDirectoryResolver also reads remote.session when its cache is cold.
-export const name = 'agent-team-model-pin-ui-1.2.3';
-export const inject = ['slots', 'locale', 'modelDirectories', 'remote', 'remote.session', 'remote.settings', 'remote.agentTeams'];
+export const name = `agent-team-model-pin-ui-${CLIENT_VERSION}`;
+export const inject = ['slots', 'locale', 'modelDirectories', 'sessions', 'remote', 'remote.session', 'remote.settings'];
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register('agentTeamModelPin', { zh, en }));
@@ -89,15 +91,12 @@ export function apply(ctx: ClientContext): void {
       setLoading(true);
       setError(null);
       try {
-        const [settings, team] = await Promise.all([
-          ctx.remote.settings.describe(), ctx.remote.agentTeams.view(sessionId),
-        ]);
+        const settings = await ctx.remote.settings.describe();
         if (!isCurrentRequest(token, request.current)) return;
         if (!settings.ok) throw new Error(settings.error.message);
-        if (!team.ok) throw new Error(team.error.message);
         const view = settings.value.namespaces.find((item) => item.ns === SETTINGS_NS);
         if (!view) throw new Error(t('missing'));
-        setTeamState({ key: teamSessionKey(sessionId, team.value), view, writable: settings.value.writable });
+        setTeamState({ key: teamSessionKey(sessionId, ctx.sessions), view, writable: settings.value.writable });
       } catch (cause) {
         if (isCurrentRequest(token, request.current)) {
           setTeamState(null);

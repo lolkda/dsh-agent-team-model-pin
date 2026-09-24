@@ -22,24 +22,25 @@ async function stageProfile(t, withPlugin) {
   const home = await mkdtemp(join(tmpdir(), 'atmp-cold-'));
   t.after(() => rm(home, { recursive: true, force: true }));
   const profile = join(home, 'profiles', 'cold-start');
-  const presetRoot = join(home, 'presets');
-  await mkdir(join(presetRoot, 'fixture'), { recursive: true });
   await mkdir(profile, { recursive: true });
-  await writeFile(join(presetRoot, 'fixture', 'agent.cordis.yml'), JSON.stringify([
-    { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { prefix: 'COLD_START_SCOPED_PERSONA' } },
-  ]));
   await writeFile(join(profile, 'package.json'), JSON.stringify({
     name: 'atmp-cold-start-fixture', private: true,
     dependencies: withPlugin ? { [manifest.name]: 'file:./candidate' } : {},
     dsh: { profile: { bundles: withPlugin ? [manifest.name] : [] } },
   }));
   await writeFile(join(profile, 'cordis.yml'), '[]\n');
+  // DSH 0.1.7-rc.1 declares presets as `@deepseek-ai/dsh-agent-preset` rows
+  // (`config.id` + `config.plugins`) instead of scanning preset roots, and the
+  // registry moved to `@deepseek-ai/dsh-agent-preset-registry` with a
+  // `{ default, selectedDefault, modeSelectionEnabled }` config.
   await writeFile(join(profile, 'cordis.patch.yml'), JSON.stringify([{ insert: [
     { id: 'system-prompt', name: '@deepseek-ai/dsh-system-prompt', config: {} },
     { id: 'session-projection', name: '@deepseek-ai/dsh-session-projection' },
-    { id: 'agent-presets', name: '@deepseek-ai/dsh-agent-presets', config: {
-      default: 'fixture', includeShippedRoot: false, includeUserRoot: false,
-      roots: [{ path: presetRoot, trust: 'user' }],
+    { id: 'agent-preset-registry', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'fixture' } },
+    { id: 'preset-fixture', name: '@deepseek-ai/dsh-agent-preset', config: {
+      id: 'fixture', order: 1, plugins: [
+        { id: 'persona', name: '@deepseek-ai/dsh-persona', config: { prefix: 'COLD_START_SCOPED_PERSONA' } },
+      ],
     } },
     { id: 'fixture-io', name: './fixture-io.mjs' },
   ] }]));

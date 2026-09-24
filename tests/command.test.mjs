@@ -12,7 +12,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { apply, inject, name as pluginName } from '../src/index.ts';
+import { Config, apply, inject, name as pluginName } from '../src/index.ts';
 
 // ---------------------------------------------------------------------------
 // 固定夹具
@@ -59,30 +59,58 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {string} [options.auditPath] 审计文件路径（默认落在本次用例自己的临时目录）。
  * @returns 假宿主句柄（含记录数组与清理函数）。
  */
+/** cosmokit 的 volatile 引用协议符号（rc.1 的 `Volatile` 字段）。 */
+const VOLATILE_WRITE = Symbol.for('cosmokit.volatile.write');
+
+/**
+ * 造一个 cosmokit 兼容的 volatile 引用，模拟 Loader 交给插件的那一个字段。
+ * @param {unknown} value 初始解析值。
+ * @returns 冻结的引用对象（get + 协议符号写入）。
+ */
+function liveRef(value) {
+  let current = value;
+  return Object.freeze({ get: () => current, [VOLATILE_WRITE]: (next) => { current = next; } });
+}
+
 function makeHarness(options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'atmp-cmd-'));
   const auditPath = options.auditPath ?? join(dir, 'audit.jsonl');
   const withSettings = options.withSettings !== false;
+  const withDescribe = options.withDescribe !== false;
   const membershipThrows = options.membershipThrows === true;
 
   const warnings = [];
-  const installCalls = [];
   const mutateCalls = [];
   const commandDefinitions = new Map();
   const listeners = [];
   const injectCalls = [];
   const effects = [];
+
+  // rc.1 模型：Composition 层 = cordis.patch.yml 的入口配置；运行期层 = profile 覆盖。
+  // Loader 把两层合并后写进 volatile 引用，插件每次读取都拿到有效层。
+  const composition = {
+    scope: options.config?.scope ?? 'teammates',
+    defaults: options.config?.defaults ?? {},
+    sessions: options.config?.sessions ?? {},
+  };
   let userSessions = {};
+  const effectiveSessions = () => ({ ...composition.sessions, ...userSessions });
+  const refs = {
+    scope: liveRef(composition.scope),
+    defaults: liveRef(composition.defaults),
+    sessions: liveRef(effectiveSessions()),
+  };
+  /** 模拟 Loader 的 volatile 就地提交。 */
+  const commit = () => { refs.sessions[VOLATILE_WRITE](effectiveSessions()); };
 
   const settings = {
-    installSection(owner, ns, schema, entry, hooks) {
-      installCalls.push({ owner, ns, schema, entry, hooks });
-      // 模仿真实 provider：先校验 entry 能过 schema，再把解析值 thunk 交给 owner。
-      const resolvedEntry = schema(entry);
-      assert.ok(resolvedEntry !== undefined, 'settings 段落 entry 未通过自己的 schema');
-      hooks.setSource(() => schema({ sessions: { ...userSessions } }));
-      if (typeof hooks.onChange === 'function') hooks.onChange();
-    },
+    // rc.1 删除了 installSection；存在它反而是契约破坏。
+    describe: withDescribe ? () => [{
+      ns: SETTINGS_NS, revision: 1,
+      base: { scope: composition.scope, defaults: composition.defaults, sessions: composition.sessions },
+      user: { sessions: userSessions },
+      value: { scope: composition.scope, defaults: composition.defaults, sessions: effectiveSessions() },
+    }] : undefined,
     async mutate(ns, ops) {
       mutateCalls.push({ ns, ops });
       for (const op of ops) {
@@ -92,10 +120,13 @@ function makeHarness(options = {}) {
         else delete next[sessionId];
         userSessions = next;
       }
+      // 真实 SettingsForms 的 unset 会重新落回 Composition 层的继承值。
+      commit();
     },
-    /** 测试专用：模拟外部（settings.yaml）改写运行期层，用于验证 setSource thunk 是活的。 */
+    /** 测试专用：模拟外部改写运行期层，用于验证插件每次读取都是活的。 */
     __setUserSessions(next) {
       userSessions = { ...next };
+      commit();
     },
   };
 
@@ -143,23 +174,26 @@ function makeHarness(options = {}) {
       effects.push(callback());
       return () => {};
     },
+    // rc.1：Loader fiber 的入口 id 就是 settings 命名空间。
+    fiber: { entry: { options: { id: SETTINGS_NS } } },
   };
 
   // 关键：除非用例显式指定，审计一律落在本用例的临时目录。
   // 否则缺省 auditPath 会指向真实 $DSH_HOME/agent-team-model-pin/audit.jsonl，
   // 污染 e2e 证据（本套件任何用例都不得写真实 DSH_HOME）。
-  const effectiveConfig = { ...(options.config ?? {}), auditPath: options.config?.auditPath ?? auditPath };
+  const auditValue = options.config?.auditPath ?? auditPath;
   // 自护栏：本套件任何用例都不得写真实 $DSH_HOME 的审计文件（那是 e2e 证据）。
   const realDshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh');
   assert.ok(
-    effectiveConfig.auditPath.startsWith(tmpdir()),
-    `测试必须把审计写进临时目录，实际 ${effectiveConfig.auditPath}`,
+    auditValue.startsWith(tmpdir()),
+    `测试必须把审计写进临时目录，实际 ${auditValue}`,
   );
   assert.ok(
-    !effectiveConfig.auditPath.startsWith(realDshHome),
-    `测试不得写真实 $DSH_HOME 审计文件，实际 ${effectiveConfig.auditPath}`,
+    !auditValue.startsWith(realDshHome),
+    `测试不得写真实 $DSH_HOME 审计文件，实际 ${auditValue}`,
   );
-  apply(ctx, effectiveConfig);
+  // rc.1 的解析配置：volatile 字段是引用（Loader 就地提交），auditPath 是普通配置。
+  apply(ctx, { scope: refs.scope, defaults: refs.defaults, sessions: refs.sessions, auditPath: auditValue });
 
   const command = () => {
     const definition = commandDefinitions.get(TEAM_MODEL);
@@ -219,13 +253,14 @@ function makeHarness(options = {}) {
     dir,
     auditPath,
     warnings,
-    installCalls,
     mutateCalls,
     commandDefinitions,
     listeners,
     injectCalls,
     effects,
     settings,
+    composition,
+    refs,
     command,
     invoke,
     request,
@@ -236,13 +271,16 @@ function makeHarness(options = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. 导出面与命令注册（SPEC 5.2 / 5.2.3）
+// 1. 导出面与命令注册（SPEC 5.2 / 5.2.3；rc.1 settings 契约）
 // ---------------------------------------------------------------------------
 
-test('1a 导出面：name / inject 与 SPEC 5.2 一致', () => {
-  // 破坏方式：改名、或在 inject 里删掉 agentTeams/commands、或额外导出 Config。
+test('1a 导出面：name / inject / Config 与 rc.1 契约一致', () => {
+  // 破坏方式：改名、在 inject 里删掉 agentTeams/commands，或不再导出 Config
+  //           （rc.1 的 settings 表单只能由导出 Config 的插件投影出来）。
   assert.equal(pluginName, 'agent-team-model-pin');
   assert.deepEqual(inject, ['agentTeams', 'commands']);
+  assert.equal(typeof Config, 'function', 'rc.1 的 settings 表单来自导出的 Config schema');
+  assert.equal(typeof Config.toJSON, 'function');
 });
 
 test('1b 命令注册：name=team-model 且带 input.hint；只注册一个 agent/request 监听（5.2.3/5.2.4）', (t) => {
@@ -258,21 +296,32 @@ test('1b 命令注册：name=team-model 且带 input.hint；只注册一个 agen
   assert.match(definition.input.hint, /clear/);
   assert.equal(typeof definition.handler, 'function');
   assert.equal(h.listeners.filter((entry) => entry.event === 'agent/request').length, 1);
-  assert.equal(h.injectCalls.filter((deps) => deps.includes('settings')).length, 1);
 });
 
-test('1c settings 段落安装：命名空间 / entry / setSource 缺一不可（SPEC 5.2.2、5.4）', (t) => {
-  // 破坏方式：installSection 的 ns 写错、entry 不是 {sessions:{}}、或不调用 hooks.setSource
-  //           （后者会让运行期层永远读不到 → 1c 的 setSource 断言与其后的活层用例一起变红）。
+test('1c rc.1 settings 契约：Config 投影 volatile sessions/defaults/scope，且不再依赖 installSection', (t) => {
+  // 破坏方式：把 sessions/defaults/scope 的 .volatile() 去掉 → rc.1 不会把它们
+  //           投进 settings 表单，运行期写入无路可走（1c 与其后的运行期用例一起变红）。
   const h = makeHarness();
   t.after(h.cleanup);
 
-  assert.equal(h.installCalls.length, 1, 'settings.installSection 应被调用一次');
-  const call = h.installCalls[0];
-  assert.equal(call.ns, SETTINGS_NS);
-  assert.deepEqual(call.entry, { sessions: {}, defaults: {}, configuredSessions: {}, scope: 'teammates' });
-  assert.equal(typeof call.hooks.setSource, 'function');
-  assert.equal(typeof call.hooks.onChange, 'function');
+  assert.equal(h.settings.installSection, undefined, 'rc.1 已删除 installSection，插件不得再依赖它');
+  // schemastery 的序列化形态是 `{uid, refs}`：根节点在 refs[uid]，子节点用数字 id 引用。
+  const json = Config.toJSON();
+  const deref = (node) => (typeof node === 'number' ? json.refs[String(node)] : node);
+  const root = deref(json.uid);
+  assert.equal(root.type, 'object');
+  const field = (name) => deref(root.dict[name]);
+  assert.equal(field('scope').meta.volatile, true, 'scope 必须是 volatile 才能被 settings 写');
+  assert.equal(field('defaults').meta.volatile, true, 'defaults 必须是 volatile 才能出现在表单里');
+  const sessions = field('sessions');
+  assert.equal(sessions.meta.volatile, true, 'sessions 必须是 volatile 才能按 session 写');
+  assert.equal(sessions.type, 'dict');
+  assert.equal(deref(sessions.inner).type, 'object');
+  assert.equal(field('auditPath').meta?.volatile, undefined, 'auditPath 是部署配置，不参与表单');
+
+  // 插件通过 ctx.get('settings').describe() 读取本入口的 Composition 基线。
+  const [entry] = h.settings.describe();
+  assert.equal(entry.ns, SETTINGS_NS, 'settings 命名空间就是 Loader 入口 id');
 });
 
 // ---------------------------------------------------------------------------
@@ -673,7 +722,7 @@ test('10b settings 缺失：show / set / clear 返回明确错误文本、零写
   assert.match(clear.text, /settings 服务不可用/);
 
   assert.equal(h.mutateCalls.length, 0, 'settings 缺失时不得发生任何写入');
-  assert.equal(h.installCalls.length, 0, 'inject 回调未执行 → installSection 不应被调用');
+  assert.equal(h.settings.installSection, undefined, 'rc.1 无 installSection，缺失 settings 不得走旧注册路径');
 });
 
 test('10c settings 缺失 + llm 缺失：set 返回错误文本而不是抛错', async (t) => {

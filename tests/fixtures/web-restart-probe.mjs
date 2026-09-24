@@ -63,7 +63,10 @@ try {
   assert.equal(entry?.fiber?.state, 2, 'candidate Host plugin must be active');
   assert.ok(ctx.get('clientModules').clientPath(packageName), 'the full Web boot must discover the Client artifact');
   const coreModules = {};
-  for (const name of ['dsh-agent', 'dsh-scope', 'dsh-system-prompt', 'dsh-agent-presets', 'dsh-agent-loop']) {
+  // DSH 0.1.7-rc.1 renamed the preset registry package (`dsh-agent-presets` →
+  // `dsh-agent-preset-registry`); the rest of the deployment-owned core set is
+  // unchanged.
+  for (const name of ['dsh-agent', 'dsh-scope', 'dsh-system-prompt', 'dsh-agent-preset-registry', 'dsh-agent-loop']) {
     const packageId = `@deepseek-ai/${name}`;
     const resolved = ctx.get('pluginPackages').packageOf(packageId, pathToFileURL(join(profileDir, 'package.json')).href);
     const expected = await realpath(dirname(installRequire.resolve(`${packageId}/package.json`)));
@@ -118,13 +121,21 @@ try {
   let restoredMessages = 0;
   if (phase === 'create') {
     await converse(primary, 'main-model', 'high');
-    await ctx.get('settings').mutate('agent-team-model-pin', [{ op: 'set', path: ['sessions', primaryId],
-      value: { provider, model: 'team-pinned', modelDefault: true } }]);
+    // Drive the real slash command, not `settings.mutate` directly: this proves
+    // the whole rc.1 chain in a deployed process — command handler →
+    // ctx.settings.mutate(entryId, ops) → profile patch → volatile commit.
+    const executed = await ctx.get('commands').execute(primary, `/team-model ${provider} team-pinned`, [], AbortSignal.timeout(5000));
+    assert.ok(executed, 'the installed /team-model command must resolve');
+    assert.equal(executed.result.kind, 'success', JSON.stringify(executed.result));
+    const committed = entry.fiber.config.sessions.get()[primaryId];
+    assert.equal(committed?.model, 'team-pinned', 'the command must commit the pin into the live entry config');
   } else {
     restoredMessages = primary.session.deriveMessages().filter((message) => message.role === 'assistant').length;
     assert.equal(restoredMessages, 2, 'two first-process responses must survive actual disk resume');
-    assert.equal(ctx.get('settings').get('agent-team-model-pin').sessions[primaryId].model, 'team-pinned',
-      'the per-session pin must survive a new DSH process');
+    // DSH 0.1.7-rc.1 removed `settings.get(ns)`; the pin is read from the
+    // plugin's own live entry config, which is exactly what the Host applies.
+    const pinned = entry.fiber.config.sessions.get()[primaryId];
+    assert.equal(pinned?.model, 'team-pinned', 'the per-session pin must survive a new DSH process');
   }
   stage = 'conversation';
   await converse(primary, 'team-pinned', undefined);

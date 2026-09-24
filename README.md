@@ -2,7 +2,17 @@
 
 DSH Agent Team 模型选择插件。**1.1.0 起直接在输入框原来的模型菜单里选择 Team 模型与推理等级**，无需手输命令。
 
-源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。UI 扩展及本轮 Host 同步修复均由主 Agent 单独完成。
+源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。本轮 DSH 0.1.7-rc.1 适配由 Agent Team 分工实现，由 Lead 统一审查、构建和安装。
+
+## DSH 0.1.7-rc.1 适配版
+
+本地修复版为 `1.3.0-rc.1`。不修改 DSH 核心或内置 preset，不依赖版本豁免，也不在 Profile 安装第二份核心 SDK。
+
+- Host 导出 `Config`，`scope/defaults/sessions` 使用原生 volatile 引用；设置写入当前 Profile patch，旧 `agent-team-model-pin:` 段由 DSH 自动导入。
+- Client 用 `sessions` 的持久父地址确定 Lead 会话，不再访问已删除的 `remote.agentTeams`；使用新版 `OutlineRegular` 图标。
+- 模型通知识别新版 `source.kind = 'model-selection'`；UI 的组合层读取 `base.sessions`。
+- 保持 Loader entry id 为 `agent-team-model-pin`；Client 用此 id 寻址配置，手动改名不在本版支持范围。
+- 以下旧版本章节是历史修复记录；本版运行时与配置接口以本节和更新后的 SPEC 为准。
 
 ## 直接在菜单里选
 
@@ -35,7 +45,7 @@ npm ci
 npm run check
 ```
 
-在 Harness 中使用插件管理器安装目录或打包工件（发布后也可用 npm 包名）：
+本适配版应先构建并 `npm pack --ignore-scripts`，再通过插件管理器安装生成的 `.tgz` 绝对路径；不要直接链接带有开发版 SDK 的工作区。下面的旧目录式示例仅作历史记录：
 
 ```text
 plugin_manager action=install_bundle target=/app/project/dsh-files/dsh-agent-team-model-pin

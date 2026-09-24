@@ -4,20 +4,22 @@ import { pathToFileURL } from 'node:url';
 
 const [installation, profileDir] = process.argv.slice(2);
 const fromInstall = (name) => import(pathToFileURL(join(installation, 'node_modules', name, 'lib/index.js')).href);
-const { boot, createProfileResolutionGeneration, loadProfileDirectory, PluginPackages } = await fromInstall('@deepseek-ai/dsh-app-boot');
+const { boot, createRuntimeResolution, loadProfileDirectory, PluginPackages } = await fromInstall('@deepseek-ai/dsh-app-boot');
 const { createScope } = await fromInstall('@deepseek-ai/dsh-scope');
 const profile = loadProfileDirectory('atmp-cold-start', profileDir, join(installation, 'package.json'));
-const generation = await createProfileResolutionGeneration({
+// DSH 0.1.7-rc.1 replaced `createProfileResolutionGeneration` with
+// `createRuntimeResolution` and passes it to `PluginPackages` as `resolution`;
+// this is exactly what `runProfile()` in lib/profile-boot.js does.
+const resolution = await createRuntimeResolution({
   installAnchor: join(installation, 'package.json'), profile,
 });
 let ctx;
 const scopes = [];
 let phase = 'boot';
 try {
-  // Exactly the runtime resolver mode used by runProfile() in DSH 0.1.6-alpha.2.
   ctx = await boot('atmp-cold-start', join(profileDir, 'cordis.yml'), [
     ...profile.layers.flatMap((layer) => layer.patches), ...profile.patches,
-  ], (owner) => owner.plugin(PluginPackages, { generation, behavior: 'enforce' }));
+  ], (owner) => owner.plugin(PluginPackages, { resolution }));
   phase = 'plugin-activation';
   const pluginEntry = [...ctx.get('loader').entries()].find((entry) => entry.options.name === '@lolkda/dsh-agent-team-model-pin');
   if (profile.layers.some((layer) => layer.packageName === '@lolkda/dsh-agent-team-model-pin')) {
@@ -48,7 +50,7 @@ try {
     phase: 'complete', globalContainsPersona, firstContainsPersona, secondContainsPersona, afterDisposeContainsPersona,
   }));
 } catch (error) {
-  console.log('ATMP_COLD_START=' + JSON.stringify({ phase, error: String(error) }));
+  console.log('ATMP_COLD_START=' + JSON.stringify({ phase, error: String(error), stack: error?.stack }));
 } finally {
   for (const scope of scopes.reverse()) await scope.dispose();
   await ctx?.fiber.dispose();

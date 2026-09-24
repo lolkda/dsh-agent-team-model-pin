@@ -1,10 +1,21 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
+import { readFile } from 'node:fs/promises';
 import { closeNativeClientDom, installation, mountNativeClient } from './fixtures/native-client.mjs';
 
 after(closeNativeClientDom);
 const integration = { skip: installation ? false : 'Install DSH or set DSH_TEST_INSTALL_ROOT to run the native Client integration' };
 const rowNames = (panel) => [...panel.querySelectorAll('[data-atmp-open]')].map((element) => element.getAttribute('data-atmp-open'));
+
+test('native Client: the shipped browser artifact carries the released version marker', integration, async (t) => {
+  // 破坏方式：dist 未随 src/package.json 重建 → 线上 registrant 与 DOM 调试标记
+  //           指向旧版本，排障时会误判页面加载的是哪个包。
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const ui = await mountNativeClient(t);
+  assert.equal(ui.candidateName, `agent-team-model-pin-ui-${manifest.version}`);
+  await ui.open();
+  assert.equal(ui.trigger().getAttribute('data-team-model-pin'), manifest.version);
+});
 
 // This fails if the plugin omits remote.session, even though its registration
 // initially wins and all tests with a fake directoryFor() would pass.
@@ -36,6 +47,15 @@ test('native Client: missing remote.session reproduces renderer abdication and n
   assert.equal(ui.occupants().find((entry) => entry.priority === 0)?.active, true);
   assert.equal(ui.trigger(), null);
   assert.ok(ui.container.querySelector('button'), 'the actual native picker must render after fallback');
+});
+
+test('native Client: a teammate seat writes the pin of its Lead session', integration, async (t) => {
+  const ui = await mountNativeClient(t, { session: 'mate-A', parents: { 'mate-A': 'lead-A' } });
+  assert.deepEqual(ui.errors, []);
+  await ui.drill('team-model');
+  await ui.choose('["team-model","p","team"]');
+  assert.deepEqual(ui.view.value.sessions['lead-A'], { provider: 'p', model: 'team', modelDefault: true });
+  assert.equal(ui.view.value.sessions['mate-A'], undefined);
 });
 
 test('native Client: Team model and effort writes leave the native main selection unchanged', integration, async (t) => {

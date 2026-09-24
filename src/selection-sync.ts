@@ -47,10 +47,21 @@ function selectionOf(route: SyncRoute): ModelSelection {
   return Object.freeze({ provider: route.provider, model: route.model,
     ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort as NonNullable<ModelSelection['reasoningEffort']> }) });
 }
+/**
+ * Whether one message is the official durable model-switch notice.
+ *
+ * `installModelSelection` tags its notice through the `MessageSourceMap`
+ * declaration of `@deepseek-ai/dsh-agent`: DSH 0.1.7-rc.1 uses the standalone
+ * `'model-selection'` kind, while 0.1.6-alpha.2 nested it as
+ * `kind: 'plugin', plugin: 'model-selection'`. Both are recognized so the
+ * superseded-notice filter survives the source-shape change.
+ */
 function isModelNotice(source: unknown): boolean {
   if (!source || typeof source !== 'object') return false;
   const value = source as Record<string, unknown>;
-  return value.kind === 'plugin' && value.plugin === 'model-selection' && value.form === 'notice';
+  if (value.form !== 'notice') return false;
+  return value.kind === 'model-selection'
+    || (value.kind === 'plugin' && value.plugin === 'model-selection');
 }
 
 /**

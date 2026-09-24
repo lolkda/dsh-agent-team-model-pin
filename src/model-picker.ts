@@ -1,14 +1,15 @@
 /** Native ModelSelect presentation: one fixed card, click-to-drill, no hover submenu.
- * Measurements and theme tokens follow DSH 0.1.6-alpha.2's ModelSelect (MIT).
+ * Measurements and theme tokens follow DSH 0.1.7-rc.1's ModelSelect (MIT).
  * Class names are package-owned; no dependency on upstream hashed CSS names.
  */
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 import {
-  IconDataOutline16, IconChevronDownOutline14,
-  IconChevronRightOutline14, IconChevronLeftOutline14, IconCheckOutline16,
+  IconDataOutlineRegular, IconChevronDownOutlineRegular,
+  IconChevronRightOutlineRegular, IconChevronLeftOutlineRegular, IconCheckOutlineRegular,
 } from '@deepseek-ai/dsh-client-ui-primitives';
 import { placePicker } from './picker-layout.ts';
+import { CLIENT_VERSION } from './ui-state.ts';
 import type { Choice, MenuRow } from './ui-state.ts';
 
 const h = React.createElement;
@@ -185,7 +186,7 @@ export function ModelPicker(props: ModelPickerProps): React.ReactElement {
       disabled: row.disabled || busy, onClick: () => drill(row.id),
     }, h('span', { className: 'atmp-cell-label' }, row.label),
     h('span', { className: 'atmp-cell-value', title: row.value }, row.value),
-    h(IconChevronRightOutline14, { className: 'atmp-cell-chevron' })));
+    h(IconChevronRightOutlineRegular, { className: 'atmp-cell-chevron' })));
 
   let lastGroup: string | undefined;
   const optionRows = choices.flatMap((choice) => {
@@ -201,21 +202,21 @@ export function ModelPicker(props: ModelPickerProps): React.ReactElement {
       disabled: busy || choice.disabled, onClick: () => { void choose(choice.id); },
       title: choice.label,
     }, h('span', { className: 'atmp-option-name' }, choice.label),
-    h('span', { className: 'atmp-check', 'aria-hidden': true }, selected && h(IconCheckOutline16, { size: 16 }))));
+    h('span', { className: 'atmp-check', 'aria-hidden': true }, selected && h(IconCheckOutlineRegular, { size: 16 }))));
     return result;
   });
 
   return h('div', { className: 'atmp-picker', ref: root, onKeyDown },
     h('style', null, css),
     h('button', {
-      ref: trigger, type: 'button', className: 'atmp-trigger', 'data-team-model-pin': '1.2.3',
+      ref: trigger, type: 'button', className: 'atmp-trigger', 'data-team-model-pin': CLIENT_VERSION,
       disabled, 'aria-label': props.title, title: props.effort ? `${props.label} · ${props.effort}` : props.label,
       'aria-haspopup': 'menu', 'aria-expanded': open, 'aria-controls': open ? `${id}-menu` : undefined,
       onClick: () => { if (busy || disabled) return; setPane('root'); props.onOpenChange(!open); },
-    }, h(IconDataOutline16, { className: 'atmp-trigger-icon', size: 16 }),
+    }, h(IconDataOutlineRegular, { className: 'atmp-trigger-icon', size: 16 }),
     h('span', { className: 'atmp-trigger-label' }, props.label),
     props.effort && h('span', { className: 'atmp-trigger-effort' }, props.effort),
-    h(IconChevronDownOutline14, { className: `atmp-chevron${open ? ' atmp-chevron-open' : ''}` })),
+    h(IconChevronDownOutlineRegular, { className: `atmp-chevron${open ? ' atmp-chevron-open' : ''}` })),
     open && createPortal(h('div', {
       ref: menu, id: `${id}-menu`, role: 'menu', className: 'atmp-menu',
       'aria-label': parent?.label ?? props.title, 'aria-busy': busy,
@@ -225,7 +226,7 @@ export function ModelPicker(props: ModelPickerProps): React.ReactElement {
       type: 'button', className: 'atmp-cell atmp-back', 'data-atmp-back': true,
       'data-atmp-item': true, role: 'menuitem', disabled: busy,
       'aria-label': props.backLabel, onClick: back,
-    }, h(IconChevronLeftOutline14, {}), parent?.label),
+    }, h(IconChevronLeftOutlineRegular, {}), parent?.label),
     h('div', { className: 'atmp-scroll', 'data-atmp-scroll': true }, pane === 'root' ? rootRows : optionRows),
     props.status && h('div', { className: 'atmp-status', role: 'status' }, props.status),
     props.error && h('div', { className: 'atmp-error', role: 'alert' },

@@ -39,14 +39,20 @@ test('actual AgentLoop: captured model request and persisted prompt share the se
       return { root: agent.id === 'loop-mate' ? lead : agent, id: 'loop-team', name: agent.id, role: agent.id === 'loop-mate' ? 'teammate' : 'lead' };
     } });
     owner.provide('settings', {
-      installSection(_owner, ns, schema, entry, hooks) {
-        hooks.setSource(() => schema(ns === 'agent-team-model-pin' ? { ...entry, sessions: pins } : entry));
-      }, async mutate() {},
+      // rc.1: the runtime store is the plugin entry config's volatile `sessions`
+      // field; the Loader commits settings writes into the reference in place.
+      describe: () => [{ ns: 'agent-team-model-pin', revision: 1,
+        base: { scope: 'teammates', defaults: {}, sessions: {} },
+        user: { sessions: pins },
+        value: { scope: 'teammates', defaults: {}, sessions: pins } }],
+      async mutate() {},
     });
   } });
   await use(AgentLoop, {});
   root.get('systemPrompt').section({ name: 'identity-proof', order: 100, text: 'request-identity={{provider}}/{{model}}' });
-  await use(plugin, { auditPath: join(dir, 'audit.jsonl') });
+  const pluginFiber = await use(plugin, { scope: 'teammates', defaults: {}, sessions: pins, auditPath: join(dir, 'audit.jsonl') });
+  const liveSessions = pluginFiber.config.sessions;
+  const setPins = (value) => { pins = value; liveSessions[Symbol.for('cosmokit.volatile.write')](value); };
   t.after(async () => {
     for (const fiber of owned.reverse()) await fiber.dispose();
     await new Promise((resolve) => setTimeout(resolve, 60));
@@ -70,7 +76,7 @@ test('actual AgentLoop: captured model request and persisted prompt share the se
   assert.match(text, /request-identity=cpa\/deepseek-flash/);
   assert.equal(mate.session.requestHeader().config.model, 'deepseek-flash');
   assert.equal(mate.options.model, 'gpt-6-astra');
-  pins = { 'loop-lead': { provider: 'cpa', model: 'gpt-6-astra', reasoningEffort: 'low' } };
+  setPins({ 'loop-lead': { provider: 'cpa', model: 'gpt-6-astra', reasoningEffort: 'low' } });
   const second = await run();
   assert.equal(requests.length, 2);
   assert.equal(second.model, 'gpt-6-astra');

@@ -29,9 +29,14 @@ for (const key of ['window', 'document', 'Node', 'HTMLElement', 'HTMLButtonEleme
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const icon = ({ className, size = 14 }) => h('svg', { className, width: size, height: size, 'aria-hidden': true });
+// DSH 0.1.7-rc.1 renames the product icon set: the glyph is fixed and the
+// rendered size stays a prop (`IconXOutlineRegular`), replacing the
+// size-suffixed `IconXOutline16`/`IconXOutline14` exports of 0.1.6-alpha.2.
+// The stub models exactly the rc.1 module surface, so a component importing a
+// removed name fails here the same way it fails in the browser.
 const primitives = {
-  IconDataOutline16: icon, IconChevronDownOutline14: icon, IconChevronRightOutline14: icon,
-  IconChevronLeftOutline14: icon, IconCheckOutline16: icon, IconWarningOutline16: icon,
+  IconDataOutlineRegular: icon, IconChevronDownOutlineRegular: icon, IconChevronRightOutlineRegular: icon,
+  IconChevronLeftOutlineRegular: icon, IconCheckOutlineRegular: icon, IconWarningOutlineRegular: icon,
   Toast: ({ message }) => h('div', { role: 'status' }, message),
 };
 let consoleSink;
@@ -59,7 +64,6 @@ class RemoteFacade extends Service {
   $on() { return noop; }
   get session() { return this.ctx['remote.session']; }
   get settings() { return this.ctx['remote.settings']; }
-  get agentTeams() { return this.ctx['remote.agentTeams']; }
 }
 
 export async function mountNativeClient(t, options = {}) {
@@ -93,7 +97,7 @@ export async function mountNativeClient(t, options = {}) {
     id, name: id, reasoning: { defaultEffort: 'high', efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] },
   })) }];
   let view = { ns: 'agent-team-model-pin', revision: 1,
-    base: { scope: 'teammates', defaults: {}, configuredSessions: {} }, value: { sessions: {} } };
+    base: { scope: 'teammates', defaults: {}, sessions: {} }, value: { sessions: {} } };
   let stopMount;
   let candidateFiber;
   let stopped = false;
@@ -103,12 +107,20 @@ export async function mountNativeClient(t, options = {}) {
     try { await act(async () => { stopMount?.(); await root.fiber.dispose(); }); }
     finally { consoleSink = undefined; container.remove(); }
   });
+  const parents = new Map(Object.entries(options.parents ?? {}));
   const ensureSession = async (id) => {
     if (bindings.has(id)) return bindings.get(id);
     const fiber = await root.plugin({ name: `native-client-session-${id}`, apply() {} });
     const projection = createSnapshotStore({ lastUsed: null, next: { provider: 'p', model: 'main', reasoningEffort: 'high' } });
     projected.set(id, projection);
-    const binding = { sessionId: id, ctx: fiber.ctx, session: { projections: { faceOf: () => projection } } };
+    const parent = parents.get(id);
+    const binding = { sessionId: id, ctx: fiber.ctx, session: {
+      projections: { faceOf: () => projection },
+      // The client Session face the shipped Agent Team UI reads to resolve a
+      // delegated child back to its Lead session.
+      getSnapshot: () => ({ subagent: parent === undefined ? undefined
+        : { address: { parentSessionId: parent, childSessionId: id, mode: 'continuable' } } }),
+    } };
     bindings.set(id, binding);
     return binding;
   };
@@ -121,7 +133,7 @@ export async function mountNativeClient(t, options = {}) {
     currentBinding = { key: id, ctx: binding.ctx, hooks: {}, keyedHooks: {}, props: { sessionId: id } };
     for (const listener of bindingListeners) listener();
   };
-  await setCurrent('lead-A');
+  await setCurrent(options.session ?? 'lead-A');
   await root.plugin({ name: 'native-client-io', apply(ctx) {
     ctx.provide('locale', locale);
     ctx.provide('commandUi', { register: () => noop });
@@ -154,7 +166,8 @@ export async function mountNativeClient(t, options = {}) {
         return { ok: true, value: view };
       },
     });
-    ctx.provide('remote.agentTeams', { view: async (id) => ({ ok: true, value: { members: [{ id, role: 'lead' }], tasks: [] } }) });
+    // DSH 0.1.7-rc.1 has no client `remote.agentTeams` namespace; the Team root
+    // key resolves through the `sessions` service instead.
   } });
   await root.plugin(RemoteFacade);
   await root.plugin(renderer);

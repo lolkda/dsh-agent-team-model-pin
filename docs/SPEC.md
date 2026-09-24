@@ -41,8 +41,7 @@
 - 身份判定：`ctx.agentTeams.tryMembership(agent)` → `{ root, id, role: 'lead'|'teammate', name } | undefined`（同步、不抛）。
 - 编辑器：`ctx.commands.register({ name, description, input: { hint }, handler })`，
   handler 收到 `{ agent, rawInput, signal }`，返回 `{ kind: 'success', text? } | { kind: 'error', text }`。
-- 存储：settings 命名空间 `installSection(owner, ns, schema, entry, hooks)` / `get(ns)` /
-  `mutate(ns, [{ op: 'set'|'unset', path }])`，持久化到 `/app/.dsh/settings.yaml`。
+- 存储（DSH 0.1.7-rc.1）：插件导出 `Config`，以 `agent-team-model-pin` entry id 定位原生 Settings 表单；`scope`、`defaults`、`sessions` 是 volatile 字段。`settings.mutate(entryId, ops, revision)` 持久化到 Profile patch，并原地提交运行中的引用；旧同名 `settings.yaml` 段由 DSH 导入且原文件保留为 `.imported`。
 - 校验：`ctx.llm.listProviders()`、`ctx.llm.resolveModelInfo(provider, model)`。
 - `@deepseek-ai/schemastery@3.18.2` 已存在于 profile 根 `node_modules`，运行时可逐级上溯解析。
 
@@ -161,15 +160,12 @@ export function assertRouteSelectable(
 
 ### 5.2 `src/index.ts`（插件入口）
 
-导出：`name = 'agent-team-model-pin'`、`inject = ['agentTeams', 'commands']`、`apply(ctx, config)`。
-（**不导出** `Config`，配置由自己的 `normalizeConfig` 处理，避免依赖 schemastery 的加载期解析；
-schemastery 仅用于 settings 段落 schema。）
+导出：`name = 'agent-team-model-pin'`、`inject = ['agentTeams', 'commands']`、`Config`、`apply(ctx, config)`。`Config` 由 Loader 校验；`scope`、`defaults`、`sessions` 是稳定的 volatile 引用，`auditPath` 是普通启动配置。
 
 `apply` 必须完成：
 
 1. 归一化配置：`{ scope, defaults, sessions, auditPath }`，非法值只告警不抛。
-2. `ctx.inject(['settings'], (s) => s.settings.installSection(ctx, 'agent-team-model-pin', schema, { sessions: {} }, hooks))`，
-   并在 `setSource` 中保存 thunk，供请求路径**同步**读取运行期层。
+2. 每次请求同步读取 `config.scope/defaults/sessions` 的 volatile 引用，不缓存旧值；使用 `settings.describe()` 的 `base` 区分组合层，命令通过 `settings.mutate(entryId, ops)` 写入。不存在已删除的 `installSection`/`setSource` 注册流程。
 3. 注册全局命令 `team-model`（`input.hint` 给出语法提示）。
 4. 注册**一个**全局 `agent/request` 监听：
 
@@ -313,7 +309,7 @@ settings 命名空间 `agent-team-model-pin`：`{ sessions: { "<sessionId>": { p
 - **1.1.3 修正**：使用宿主 React、React DOM、原生图标、locale 与主题变量，恢复原生 ModelSelect 的按钮与卡片尺寸、字体和配色；不用通用 Menu 的悬停子菜单。只显示一个锚定弹层，点击切换模型/effort 列表，有可点击返回按钮；列表内部滚动，按 visualViewport 限制宽高，支持键盘返回、关闭、焦点恢复与外部 pointerdown 关闭。
 - Client 明确注入 `remote`。测试中的服务必须由兄弟 provider fiber 提供，不能从根 context 提供而意外绕过 Cordis 的注入检查；正向加载和故意移除 remote 的反向用例都必须成立。
 - 不新增 Service、Remote 或工具；复用 `settings.describe/mutate`、`agentTeams.view` 与 `modelDirectories`。
-- settings 的不可变 `base` 增加 defaults/configuredSessions/scope 元数据供 UI 展示；用户层仍只写 sessions。UI 不把可修改的 user metadata 当成组合层权威值。
+- SettingsForms 的不可变 `base` 使用 `defaults/sessions/scope` 字段供 UI 展示；用户层仍按 session 路径写入。UI 不再读取旧字段 `configuredSessions`，也不把 user metadata 当成组合层权威值。
 - 源码仍为 TypeScript。构建增加 esbuild，将 Client 打包为 `window.__ModuleLoader__.load` factory；React 与原生组件均 external，不复制运行时。
 - **1.1.1 修正**：默认 bundle 必须挂载包根 `@lolkda/dsh-agent-team-model-pin`；`./client` 是浏览器工件。DSH 的 `exactPackageSpecifier` 明确跳过 `/web` 等包子路径，Host active 不能证明 Client 被发现。`./web` 仅保留为可选 Host 导出，不用于 Web 自动发现。`prepare` 仍确保干净打包包含完整 dist。
 - 插件包升级的重启要求与配置生效是两回事：安装器返回 `restart-required` 时不能声称新菜单已上线；加载后修改 Team 设置从后续请求生效。
@@ -350,7 +346,7 @@ settings 命名空间 `agent-team-model-pin`：`{ sessions: { "<sessionId>": { p
 
 ## 13. 1.2.3 Client 冷目录与真实渲染契约
 
-- Client 必须声明 `remote.session`：原生 `ModelDirectoryResolver.directoryFor()` 在首次创建目录时会通过调用上下文读取此命名空间，不能仅声明 `remote`、`remote.settings`、`remote.agentTeams`。
+- Client 必须声明原生目录读取所需的 `remote.session`、设置写入所需的 `remote.settings` 以及会话绑定服务 `sessions`。DSH 0.1.7-rc.1 已删除 `remote.agentTeams`；Team 的 Lead 键由 `sessions.binding(id)` 快照中的持久父地址派生。
 - 保留原有 model 单插槽与 priority -100。组件不能因为缺少依赖而被 Slot renderer 标记 abdicated、回退到原生两项菜单。不得靠调优先级、关闭错误边界或反复重新注册掩盖错误。
 - 保留主模型、主推理等级、分隔线、Team 模型、Team 推理等级。Team 设置仍以 LeadSessionId + revision 写入原 settings 命名空间，无新增字段或迁移。
 - 原生目录加载失败由其 store 发布可见错误；调用方必须消费 load Promise 的 rejection，不能产生未处理拒绝。普通 settings RPC 失败/只读/CAS 冲突在组件内呈现，不让整个控件退出。

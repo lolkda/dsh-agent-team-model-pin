@@ -29,7 +29,10 @@ async function harness(t, initial = {}, config = {}) {
     owner.provide('agentTeams', { tryMembership: (agent) => memberships.get(agent) });
     owner.provide('commands', { register() { return () => {}; } });
     owner.provide('settings', {
-      installSection(_owner, _ns, schema, entry, hooks) { hooks.setSource(() => schema({ ...entry, sessions: pins })); },
+      describe: () => [{ ns: 'agent-team-model-pin', revision: 1,
+        base: { scope: 'teammates', defaults: {}, sessions: {} },
+        user: { sessions: pins },
+        value: { scope: 'teammates', defaults: {}, sessions: pins } }],
       async mutate() {},
     });
   } });
@@ -56,7 +59,10 @@ async function harness(t, initial = {}, config = {}) {
   };
   const lead = await make('lead-A');
   const existing = await make('existing', { lead });
-  fiber = await root.plugin(plugin, { ...config, auditPath: join(dir, 'audit.jsonl') });
+  fiber = await root.plugin(plugin, { scope: 'teammates', defaults: {}, sessions: initial, ...config, auditPath: join(dir, 'audit.jsonl') });
+  // The real schema resolution produced the volatile store reference the plugin
+  // reads; committing into it models one Loader settings write.
+  const liveSessions = fiber.config.sessions;
   const counters = new Map();
   const prepare = async (agent, { base, signal, turn = 1, beforeAdmission } = {}) => {
     const step = (counters.get(agent) ?? 0) + 1;
@@ -85,7 +91,7 @@ async function harness(t, initial = {}, config = {}) {
     await rm(dir, { recursive: true, force: true });
   });
   return { root, prompts, lead, existing, make, prepare,
-    setPins(value) { pins = value; },
+    setPins(value) { pins = value; liveSessions[Symbol.for('cosmokit.volatile.write')](value); },
     unload: () => fiber.dispose(),
     async audit() { await new Promise((resolve) => setTimeout(resolve, 40)); return (await readFile(join(dir, 'audit.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse); },
   };
@@ -183,7 +189,9 @@ test('sync: native selector and notices agree with the effective Team route', as
   const step = await h.prepare(h.existing);
   assert.match(step.text, /model=deepseek-flash/);
   assert.equal((await step.request()).model, 'deepseek-flash');
-  const notices = step.decision.messages.filter((message) => message.source?.plugin === 'model-selection');
+  // DSH 0.1.7-rc.1 tags the durable model-switch notice with source.kind
+  // 'model-selection'; 0.1.6-alpha.2 used kind 'plugin' + plugin 'model-selection'.
+  const notices = step.decision.messages.filter((message) => message.source?.kind === 'model-selection');
   assert.equal(notices.length, 1);
   assert.match(notices[0].content[0].text, /deepseek-flash/);
   assert.doesNotMatch(notices[0].content[0].text, /native-model/);

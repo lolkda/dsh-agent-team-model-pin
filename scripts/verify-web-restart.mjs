@@ -38,14 +38,12 @@ try {
     dependencies: { [manifest.name]: 'file:./candidate' },
     dsh: { profile: { bundles: [
       '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app',
-      '@deepseek-ai/dsh-experimental-agent-team-profile',
-      '@deepseek-ai/dsh-experimental-agent-team-web-profile', manifest.name,
+      '@deepseek-ai/dsh-experimental-agent-team-profile', manifest.name,
     ] } },
   }, null, 2));
   await writeFile(join(profile, 'pnpm-workspace.yaml'), 'packages:\n  - .\nnodeLinker: hoisted\nautoInstallPeers: false\n');
   await writeFile(join(profile, 'cordis.patch.yml'), JSON.stringify([
     { id: 'session-title-llm', disabled: true },
-    { id: 'agent-presets', config: { default: 'cordis', includeShippedRoot: true, includeUserRoot: false } },
     { id: 'agent-team-model-pin', config: { scope: 'all', defaults: {}, sessions: {}, auditPath: join(home, 'pin-audit.jsonl') } },
   ], null, 2));
   const env = Object.fromEntries(['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SYSTEMROOT'].flatMap((key) =>

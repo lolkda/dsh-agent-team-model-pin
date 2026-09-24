@@ -9,6 +9,7 @@ import { SlotCore } from '@deepseek-ai/dsh-client-ui-slots';
 import { JSDOM } from 'jsdom';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
+import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'http://localhost/' });
@@ -28,11 +29,12 @@ runInNewContext(compiled.outputFiles[0].text, {
   HTMLElement: win.HTMLElement, HTMLButtonElement: win.HTMLButtonElement, queueMicrotask, console,
   require(name) {
     if (name === '@deepseek-ai/dsh-client-ui-primitives') return {
+      // DSH 0.1.7-rc.1 names the product icon set by glyph + stroke weight.
       // Legacy Menu is present only so the old implementation reaches the
       // failing assertions. The repaired view does not import this component.
       Menu: ({ anchor, open }) => React.createElement(React.Fragment, null, anchor, open && React.createElement('div', { 'data-legacy-menu': true })),
-      IconDataOutline16: icon, IconChevronDownOutline14: icon,
-      IconChevronRightOutline14: icon, IconChevronLeftOutline14: icon, IconCheckOutline16: icon,
+      IconDataOutlineRegular: icon, IconChevronDownOutlineRegular: icon,
+      IconChevronRightOutlineRegular: icon, IconChevronLeftOutlineRegular: icon, IconCheckOutlineRegular: icon,
     };
     return require(name);
   },
@@ -67,7 +69,7 @@ async function mount(t, options = {}) {
   let state = { current: { provider: 'p', model: 'main', ...(options.omitEffort ? {} : { reasoningEffort: options.initialEffort ?? 'high' }) },
     groups, failures: [], status: 'ready', error: null };
   let view = { ns: 'agent-team-model-pin', revision: 1,
-    base: { scope: 'teammates', defaults: {}, configuredSessions: {} }, value: { sessions: {} } };
+    base: { scope: 'teammates', defaults: {}, sessions: {} }, value: { sessions: {} } };
   const directory = {
     store: { getSnapshot: () => state, subscribe: (fn) => { listeners.add(fn); return () => listeners.delete(fn); } },
     load: async () => state,
@@ -75,10 +77,18 @@ async function mount(t, options = {}) {
   };
   const context = new Context();
   const providers = [];
+  // DSH 0.1.7-rc.1 dropped the client `remote.agentTeams` namespace. The Team
+  // root key comes from the client Session face's durable direct-parent
+  // address, so the fixture models the real `sessions` service surface.
+  const parents = new Map([['lead-A', undefined], ['lead-B', undefined], ['child-A', 'lead-A']]);
   const services = {
     locale: { register(ns, dicts) { strings = dicts.zh; return () => {}; },
       bind() { return (name) => strings[name]; }, subscribe() { return () => {}; } },
     modelDirectories: { directoryFor: () => directory },
+    sessions: {
+      binding: (id) => parents.has(id) ? { session: { getSnapshot: () => ({ subagent: parents.get(id) === undefined
+        ? undefined : { address: { parentSessionId: parents.get(id), childSessionId: id, mode: 'continuable' } } }) } } : undefined,
+    },
     remote: {
       settings: {
         describe: async () => { calls.describe++; return { ok: true, value: { writable: true, namespaces: [view] } }; },
@@ -90,7 +100,6 @@ async function mount(t, options = {}) {
           return { ok: true, value: view };
         },
       },
-      agentTeams: { view: async (id) => ({ ok: true, value: { members: [{ id, role: 'lead' }], tasks: [] } }) },
     },
     slots: {
       inject(name, fn) { assert.equal(name, 'conversation.input.model'); const dispose = fn(); slotsDisposers.push(dispose); return dispose; },
@@ -100,7 +109,7 @@ async function mount(t, options = {}) {
   // Each RPC namespace is its own sibling Cordis service, not a plain
   // nested object. The transport facade delegates namespace reads to the
   // REAL Cordis resolver so a missing qualified inject cannot be hidden.
-  const namespaces = { 'remote.session': {}, 'remote.settings': services.remote.settings, 'remote.agentTeams': services.remote.agentTeams };
+  const namespaces = { 'remote.session': {}, 'remote.settings': services.remote.settings };
   services.remote = {};
   const providerFiber = await context.plugin({ name: 'test-service-provider', apply(owner) {
     for (const [name, value] of Object.entries({ ...services, ...namespaces })) providers.push(owner.provide(name, value));
@@ -111,7 +120,7 @@ async function mount(t, options = {}) {
     apply(scope) {
       void scope.remote;
       const facade = new Proxy({}, { get(_target, key) {
-        return key === 'settings' || key === 'agentTeams' ? scope[`remote.${key}`] : undefined;
+        return key === 'settings' ? scope['remote.settings'] : undefined;
       } });
       return module.exports.apply(scope.extend({ remote: facade }));
     },
@@ -122,7 +131,7 @@ async function mount(t, options = {}) {
   const container = win.document.createElement('div');
   win.document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(React.createElement(winner.component, { sessionId: 'lead-A', locked: false })));
+  await act(async () => root.render(React.createElement(winner.component, { sessionId: options.sessionId ?? 'lead-A', locked: false })));
   let stopped = false;
   const unload = async () => {
     if (stopped) return;
@@ -143,8 +152,18 @@ async function mount(t, options = {}) {
   return { calls, core, originalPicker, unload, trigger, panel, open, drill, choose };
 }
 
+test('packaging: the client version marker is in lockstep with package.json', async (t) => {
+  // 破坏方式：只改 package.json 版本而忘了 src 的 CLIENT_VERSION（或反之）→
+  //           registrant 与 DOM 调试标记会指向一个不存在的版本，排障时误导。
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(module.exports.name, `agent-team-model-pin-ui-${manifest.version}`);
+  const ui = await mount(t);
+  await ui.open();
+  assert.equal(ui.trigger().getAttribute('data-team-model-pin'), manifest.version);
+});
+
 test('real Cordis: Team settings load through an explicitly injected remote service', async (t) => {
-  for (const namespace of ['remote.settings', 'remote.agentTeams']) {
+  for (const namespace of ['remote.settings', 'sessions']) {
     assert.ok(module.exports.inject.includes(namespace), `the GUI requires the qualified service ${namespace}`);
   }
   const ui = await mount(t);
@@ -154,7 +173,7 @@ test('real Cordis: Team settings load through an explicitly injected remote serv
   assert.equal(ui.panel().querySelector('[role="alert"]'), null);
 });
 
-for (const namespace of ['remote.settings', 'remote.agentTeams']) {
+for (const namespace of ['remote.settings', 'sessions']) {
   test(`real Cordis: omitting ${namespace} reproduces the qualified GUI guard error`, async (t) => {
     const ui = await mount(t, { omitNamespace: namespace });
     await ui.open();
@@ -163,6 +182,15 @@ for (const namespace of ['remote.settings', 'remote.agentTeams']) {
     assert.ok(error.includes(`"${namespace}" without inject`), error);
   });
 }
+
+test('real Cordis: a delegated child seat edits the pin of its Lead session', async (t) => {
+  const ui = await mount(t, { sessionId: 'child-A' });
+  assert.ok(ui.calls.describe > 0);
+  await ui.drill('team-model');
+  await ui.choose('["team-model","p","team"]');
+  assert.deepEqual(ui.calls.settings, [['agent-team-model-pin', [{ op: 'set', path: ['sessions', 'lead-A'],
+    value: { provider: 'p', model: 'team', modelDefault: true } }], 1]]);
+});
 
 test('real SlotCore + React DOM: native-looking trigger and original/Team rows', async (t) => {
   const ui = await mount(t);

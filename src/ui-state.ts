@@ -3,6 +3,14 @@ import { applyTeamPin, normalizePin, resolvePin } from './pin.ts';
 import type { Pin, Scope } from './pin.ts';
 
 export const SETTINGS_NS = 'agent-team-model-pin';
+
+/**
+ * Version marker for the browser half: the client registrant label and the
+ * picker's `data-team-model-pin` debug attribute. It is the single literal to
+ * bump for a release, and `tests/client.test.mjs` asserts it matches
+ * `package.json` so the two cannot drift.
+ */
+export const CLIENT_VERSION = '1.3.0-rc.1';
 export interface Selection { provider: string; model: string; reasoningEffort?: string }
 export interface ModelInfo {
   id: string; name: string; description?: string;
@@ -19,15 +27,39 @@ export interface SettingsRemote {
     mutate(ns: string, ops: { op: 'set'; path: string[]; value: Pin }[], revision: number): Promise<Result<NamespaceView>>;
   };
 }
-export interface TeamView { members: readonly { id: string; role: string }[] }
+/** Structural view of one client Session face; only the durable subagent address is read. */
+export interface SessionFaceLike {
+  getSnapshot(): { subagent?: { address?: { parentSessionId?: string } } } | undefined;
+}
+/** Structural view of the client `sessions` service (`dsh-api-session-controller`). */
+export interface SessionsLike {
+  binding(sessionId: string): { session: SessionFaceLike } | undefined;
+}
 export interface RequestKey { sessionId: string; generation: number }
 
 export function isCurrentRequest(request: RequestKey, current: RequestKey): boolean {
   return request.sessionId === current.sessionId && request.generation === current.generation;
 }
 
-export function teamSessionKey(sessionId: string, view: TeamView): string {
-  return view.members.find((member) => member.role === 'lead')?.id ?? sessionId;
+/**
+ * The Team root (Lead) session key one composer seat belongs to.
+ *
+ * DSH 0.1.7-rc.1 dropped the client `remote.agentTeams` namespace; the shipped
+ * Agent Team UI derives the same key from the Session face's durable
+ * direct-parent address, so a delegated child resolves to its Lead and a root
+ * session resolves to itself. Any missing or unreadable face degrades to the
+ * session's own id instead of breaking the composer.
+ * @param sessionId Session owning the rendered seat.
+ * @param sessions Client `sessions` service.
+ * @returns The session key used for the per-session Team pin.
+ */
+export function teamSessionKey(sessionId: string, sessions: SessionsLike): string {
+  try {
+    const parent = sessions.binding(sessionId)?.session.getSnapshot()?.subagent?.address?.parentSessionId;
+    return typeof parent === 'string' && parent.length > 0 ? parent : sessionId;
+  } catch {
+    return sessionId;
+  }
 }
 
 export function findModel(groups: readonly ProviderGroup[], route: Partial<Selection> | null | undefined): ModelInfo | undefined {
@@ -55,15 +87,18 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 export function readTeamPin(view: Pick<NamespaceView, 'base' | 'value'>, sessionId: string): Pin | undefined {
-  // Only the immutable base advertises composition metadata; never trust a
-  // user-supplied "defaults" value as the Host's configuration.
+  // DSH 0.1.7-rc.1 describes a plugin's own configuration entry: `base` is the
+  // Composition layer (scope / defaults / sessions as declared by the bundle or
+  // patch) and `value` is the resolved layer, which already merges the profile
+  // override on top. Composition metadata is only ever read from `base`, so a
+  // user-supplied "defaults" can never masquerade as the deployment's config.
   const base = record(view.base);
   const value = record(view.value);
   return resolvePin({
     scope: (['teammates', 'members', 'all'].includes(String(base.scope)) ? base.scope : 'teammates') as Scope,
     role: 'teammate', sessionId,
     defaults: normalizePin(base.defaults),
-    configSessions: record(base.configuredSessions) as Record<string, Pin>,
+    configSessions: record(base.sessions) as Record<string, Pin>,
     liveSessions: record(value.sessions) as Record<string, Pin>,
   });
 }
