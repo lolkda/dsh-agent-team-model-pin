@@ -68,6 +68,27 @@ test('release: every workflow derives the DSH runtime version from package.json'
   }
 });
 
+// Reintroducing peer == devDependency would reject an unrestricted runtime
+// peer. Execute the actual workflow shell block, without installing anything.
+test('release: runtime resolution accepts an unrestricted peer and a pinned test SDK', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'atmp-runtime-gate-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, 'package.json'), JSON.stringify({
+    ...pkg, peerDependencies: { '@deepseek-ai/dsh-agent': '*' },
+  }));
+  for (const [name, workflow] of [['ci', ci], ['release', release]]) {
+    const block = workflow.match(/- name: Resolve the DSH runtime version from package\.json\n        run: \|\n((?:          .*\n)+)/)?.[1];
+    assert.ok(block, `${name} must expose its runtime-resolution step`);
+    const output = join(directory, `${name}.env`);
+    try {
+      await exec('bash', ['-c', block], { cwd: directory, env: { ...process.env, GITHUB_ENV: output } });
+    } catch (error) {
+      assert.fail(`${name} rejected a wildcard peer: ${error.stdout}\n${error.stderr}`);
+    }
+    assert.equal(await readFile(output, 'utf8'), `DSH_RUNTIME_VERSION=${pkg.devDependencies['@deepseek-ai/dsh-agent']}\n`);
+  }
+});
+
 test('release: the README gate installs the DSH runtime package.json pins, not a literal', () => {
   assert.ok(!literalDshPin.test(readme),
     'README.md pins a literal DSH version that drifts from package.json');

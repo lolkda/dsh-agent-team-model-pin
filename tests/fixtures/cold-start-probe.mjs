@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const [installation, profileDir] = process.argv.slice(2);
+const [installation, profileDir, withPlugin] = process.argv.slice(2);
 const fromInstall = (name) => import(pathToFileURL(join(installation, 'node_modules', name, 'lib/index.js')).href);
 const { boot, createRuntimeResolution, loadProfileDirectory, PluginPackages } = await fromInstall('@deepseek-ai/dsh-app-boot');
 const { createScope } = await fromInstall('@deepseek-ai/dsh-scope');
@@ -22,7 +22,9 @@ try {
   ], (owner) => owner.plugin(PluginPackages, { resolution }));
   phase = 'plugin-activation';
   const pluginEntry = [...ctx.get('loader').entries()].find((entry) => entry.options.name === '@lolkda/dsh-agent-team-model-pin');
-  if (profile.layers.some((layer) => layer.packageName === '@lolkda/dsh-agent-team-model-pin')) {
+  if (withPlugin === 'true') {
+    assert.ok(profile.layers.some((layer) => layer.packageName === '@lolkda/dsh-agent-team-model-pin'),
+      'the configured bundle must not be silently skipped by compatibility validation');
     assert.equal(pluginEntry?.fiber?.state, 2, 'the installed plugin must activate, not silently stay failed/pending');
     const deployed = await fromInstall('@deepseek-ai/dsh-agent');
     const loaded = await pluginEntry.parent.tree.import('@deepseek-ai/dsh-agent');

@@ -38,6 +38,10 @@ const primitives = {
   IconDataOutlineRegular: icon, IconChevronDownOutlineRegular: icon, IconChevronRightOutlineRegular: icon,
   IconChevronLeftOutlineRegular: icon, IconCheckOutlineRegular: icon, IconWarningOutlineRegular: icon,
   Toast: ({ message }) => h('div', { role: 'status' }, message),
+  // The native 0.2 picker imports this helper even while closed. This fixture
+  // only has two models (no search box), so the search boundary is identity.
+  // Refuse non-empty queries instead of pretending to test native ranking.
+  rankByName(items, query) { assert.equal(query, ''); return items; },
 };
 let consoleSink;
 async function loadClient(path) {

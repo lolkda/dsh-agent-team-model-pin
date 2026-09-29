@@ -78,7 +78,7 @@ for (const withPlugin of [false, true]) {
     let output;
     try {
       output = await exec(process.execPath, [
-        fileURLToPath(new URL('fixtures/cold-start-probe.mjs', import.meta.url)), installation, profile,
+        fileURLToPath(new URL('fixtures/cold-start-probe.mjs', import.meta.url)), installation, profile, String(withPlugin),
       ], {
         cwd: profile,
         env: { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' },

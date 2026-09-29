@@ -5,6 +5,14 @@ import { runInNewContext } from 'node:vm';
 
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
+test('packaging: the lockfile describes the same release and SDK contract', async () => {
+  const lock = JSON.parse(await readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  assert.equal(lock.version, pkg.version);
+  assert.equal(lock.packages[''].version, pkg.version);
+  assert.deepEqual(lock.packages[''].peerDependencies, pkg.peerDependencies);
+  assert.deepEqual(lock.packages[''].devDependencies, pkg.devDependencies);
+});
+
 test('packaging: a dual-face bundle mounts its bare package name, not a Host-only subpath', async () => {
   const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8');
   const match = patch.match(/^\s+name:\s*['"]([^'"]+)['"]\s*$/m);
@@ -35,7 +43,8 @@ test('packaging: core SDKs remain host-owned instead of shadowing profile regist
     assert.doesNotMatch(dependency, /^@deepseek-ai\/(?:dsh-|cordis(?:$|-))/,
       dependency + ' must not install a second Host runtime in the profile');
   }
-  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-agent'], pkg.devDependencies?.['@deepseek-ai/dsh-agent']);
+  // Reintroducing an exact/ranged SDK peer would block future runtime upgrades.
+  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-agent'], '*');
   assert.ok(pkg.peerDependencies?.['@deepseek-ai/dsh-agent'], 'declare the supported official selector SDK');
   assert.equal(pkg.peerDependenciesMeta?.['@deepseek-ai/dsh-agent']?.optional, true,
     'the peer must not cause automatic installation; DSH supplies its own runtime fallback');

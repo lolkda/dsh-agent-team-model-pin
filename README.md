@@ -2,11 +2,18 @@
 
 DSH Agent Team 模型选择插件。**1.1.0 起直接在输入框原来的模型菜单里选择 Team 模型与推理等级**，无需手输命令。
 
-源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。本轮 DSH 0.1.7-rc.1 适配由 Agent Team 分工实现，由 Lead 统一审查、构建和安装。
+源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。
 
-## DSH 0.1.7-rc.1 适配版
+## 1.3.1：取消 DSH 版本绑定，验证 0.2.0-rc.2
 
-当前版本为 `1.3.0`。不修改 DSH 核心或内置 preset，不依赖版本豁免，也不在 Profile 安装第二份核心 SDK。
+- 运行时 `@deepseek-ai/dsh-agent` 为 optional peer `*`，不再绑定到 `0.1.7-rc.1`，无需 `dsh plugin allow-version`。DSH 的兼容检查包含预发布版本，因此 `0.2.0-rc.2` 也不会被版本号拦截。
+- `*` 只取消版本号限制，**不保证未来破坏性 API 变更仍兼容**。仍要求宿主提供 `installModelSelection()`、volatile Settings、Agent Teams 和原生 Web 模型目录等接口；保留已有请求冲突检查，不吞掉真实运行错误。
+- 开发 SDK 固定为 `0.2.0-rc.2`，只用于可复现的类型检查和回归测试，不会作为运行时依赖安装到 Profile。CI/发布从开发依赖读取验证版本，不再要求它与 peer 字符串相等。
+- 保持模型钉、提示词/请求快照、Lead 会话键、CAS 保存及审计行为不变；升级不需要配置迁移。修正冷启动测试的误报：配置了插件但被跳过时必须失败。
+
+不修改 DSH 核心或内置 preset，不依赖版本豁免，也不在 Profile 安装第二份核心 SDK。
+
+### 延续的 Settings 与 Client 接口
 
 - Host 导出 `Config`，`scope/defaults/sessions` 使用原生 volatile 引用；设置写入当前 Profile patch，旧 `agent-team-model-pin:` 段由 DSH 自动导入。
 - Client 用 `sessions` 的持久父地址确定 Lead 会话，不再访问已删除的 `remote.agentTeams`；使用新版 `OutlineRegular` 图标。
@@ -198,7 +205,7 @@ npm run check
 
 流程是 `verify` → 打包 → `publish`，两步之间用 artifact 传递 tarball：
 
-1. `verify`：`npm ci` → 从 `package.json` 读出 DSH runtime 版本并安装（peer 与 devDependency 必须一致，否则失败）→ typecheck → build → 测试（`# skipped 0` 守卫）→ `smoke:dist` → 标签校验 → `npm pack` 出 tarball → 校验包内必须含 `dist/*` 与 bundle patch、且不含 `src/`、`tests/`、`docs/`。
+1. `verify`：`npm ci` → 从 `package.json` 的 devDependency 读出 DSH 验证版本并安装（runtime peer 为 `*`，不与开发版本作字符串相等比较）→ typecheck → build → 测试（`# skipped 0` 守卫）→ `smoke:dist` → 标签校验 → `npm pack` 出 tarball → 校验包内必须含 `dist/*` 与 bundle patch、且不含 `src/`、`tests/`、`docs/`。
 2. `publish`：只下载上一步的 tarball 再 `npm publish <tarball>`，**不重新构建**。发布 tarball 时 npm 不跑生命周期脚本，所以「发出去的字节」就是「被验证过的字节」，不会因为在另一台机器上重打包而产生差异。
 
 `dist-tag` 由 [scripts/release-plan.mjs](scripts/release-plan.mjs) 依据**实时 registry 状态**决定（回归见 [tests/release.test.mjs](tests/release.test.mjs)）：
