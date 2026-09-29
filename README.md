@@ -1,6 +1,6 @@
 # dsh-agent-team-model-pin
 
-DSH Agent Team 模型选择插件。**1.1.0 起直接在输入框原来的模型菜单里选择 Team 模型与推理等级**，无需手输命令。
+DSH Agent Team 模型选择插件。**1.4.0 起通过原生 `/team-model` 和 `/team-effort` 搜索选择面板设置队友模型，不再替换输入框的原生模型选择器，也不提供仿原生 CSS 或常驻按钮。**
 
 源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。
 
@@ -16,30 +16,28 @@ DSH Agent Team 模型选择插件。**1.1.0 起直接在输入框原来的模型
 ### 延续的 Settings 与 Client 接口
 
 - Host 导出 `Config`，`scope/defaults/sessions` 使用原生 volatile 引用；设置写入当前 Profile patch，旧 `agent-team-model-pin:` 段由 DSH 自动导入。
-- Client 用 `sessions` 的持久父地址确定 Lead 会话，不再访问已删除的 `remote.agentTeams`；使用新版 `OutlineRegular` 图标。
+- Client 用 `sessions` 的持久父地址确定 Lead 会话，不再访问已删除的 `remote.agentTeams`；1.4.0 的菜单、图标与交互由原生命令 UI 提供。
 - 模型通知识别新版 `source.kind = 'model-selection'`；UI 的组合层读取 `base.sessions`。
 - 保持 Loader entry id 为 `agent-team-model-pin`；Client 用此 id 寻址配置，手动改名不在本版支持范围。
 - 以下旧版本章节是历史修复记录；本版运行时与配置接口以本节和更新后的 SPEC 为准。
 
-## 直接在菜单里选
+## 1.4.0：原生命令选择面板
 
-点击输入框右下角现有的模型按钮。桌面、手机和平板均只显示一个弹层：**点击进入选项列表，用返回按钮回到根菜单**，不需要 hover，也不向侧面展开第二个菜单：
+在输入框输入以下命令，或从 `/` 命令列表选中它。**不需要手动输入 provider/model 参数**：
 
-```text
-模型                  当前主模型  ›
-推理等级                   High  ›
-──────────────────────────────────
-Team 模型          跟随主 Agent  ›
-Team 推理等级      跟随主 Agent  ›
-```
+| 命令 | 原生选择面板 |
+|---|---|
+| `/team-model` | 「跟随主 Agent」和按提供商分组的模型；支持原生模糊搜索 |
+| `/team-effort` | 当前有效 Team 模型支持的推理等级和「模型默认」；模型跟随时另有「跟随主 Agent」 |
 
-- 上面两项继续控制**主 Agent**，通过 DSH 原有共享模型目录完成选择。
-- 下面两项控制**当前会话的 Team**，以 Lead 会话 ID 保存；切换会话不会串配置。
-- 模型按提供商的目录顺序展示，并显示提供商名称；推理等级只列出该模型支持的选项。
-- **跟随主 Agent**可覆盖组合配置里的固定模型；跟随时也可以单独指定 Team 的推理等级。
-- **模型默认**清除此前继承的推理等级。切换 Team 模型会自动恢复模型默认，不把旧模型的 effort 带过去。
-- 保存带 revision 校验；冲突或失败直接显示在菜单中，不会假装成功。失败时可以点「重试」。
-- 默认 `scope=teammates` 不影响 Lead；高级配置主动设置 `members/all` 时仍遵守该扩大后的作用范围。
+- 输入框模型按钮和 `/model` 完全由 DSH 原生插件管理，本插件不再注册 `conversation.input.model`。主模型的搜索、布局、状态提示直接跟随 DSH 升级。
+- 当前选择有勾选标记。方向键、Enter/Tab 选择、Escape 关闭、搜索框、错误显示和防重复提交均来自原生 `popupSelect`，插件只提供选项与保存回调。
+- 设置以 Lead 会话 ID 保存；子会话也写入其 Lead 的 Team 配置，从 Lead 目录读取选项，不修改主模型。
+- **跟随主 Agent**覆盖组合配置里的固定模型，跟随时仍可单独指定 Team effort；固定模型的 effort 菜单不会提供会改变模型路由的「跟随」项。
+- **模型默认**清除继承 effort；选择固定 Team 模型也会恢复模型默认。无推理等级的模型不显示任意等级，但允许清除旧 effort。
+- 保存使用打开菜单时的 revision。加载失败可点原生「重试」；临时保存失败可重新选择。CAS 冲突或打开期间主模型发生变化时，关闭后重新打开，避免覆盖并发修改。
+- 不带参数的 `/team-model` 使用原生 host-command decoration，不与后端命令重名注册；带参数的 `show`、`clear`、`<provider> <model> [effort]` 继续走原后端命令。`/team-effort` 是 Web 客户端选择入口，不新增后端命令。
+- 旧 Team 配置无需迁移。默认 `scope=teammates` 不影响 Lead；高级配置主动设置 `members/all` 时仍遵守该扩大后的作用范围。
 
 保存后从已有队友的下一次提示词组装生效，无需重建队友；当前步骤及其重试保持同一选择，已发出的请求不会被修改。跟随源是 Lead 已生效的请求路由；尚未进入提示词组装的主模型选择仍受 DSH 原生生效边界控制。
 
@@ -58,7 +56,7 @@ npm run check
 plugin_manager action=install_bundle target=/app/project/dsh-files/dsh-agent-team-model-pin
 ```
 
-安装影响当前 profile 的所有会话，Team 配置则按会话隔离。Web UI 需要启用 DSH 原生模型选择器及 Agent Teams Web 功能。
+安装影响当前 profile 的所有会话，Team 配置则按会话隔离。Web UI 需要 DSH 原生命令 UI（含 `decorate` / `popupSelect`）、模型目录及 Agent Teams 功能；开发与集成测试使用 `0.2.0-rc.2`。
 
 **升级必须区分保存与激活**：
 
@@ -66,9 +64,9 @@ plugin_manager action=install_bundle target=/app/project/dsh-files/dsh-agent-tea
 - `application: restart-required` 表示升级包已保存，但**新代码尚未加载**。应重启当前 DSH 服务，再刷新原页面；只刷新浏览器不能替换 Host 已缓存的模块。
 - 已加载后修改 Team 设置不需要重启。不要把配置即时生效误解为代码升级也能即时生效。
 
-**1.1.1 修复客户端发现**：默认 bundle 必须挂载包根 `@lolkda/dsh-agent-team-model-pin`，不能使用 `/web` 子路径。DSH 的客户端扫描器会跳过包子路径，即使该 Host 行显示 active。浏览器工件为 `dist/client.js`，只接管 `conversation.input.model`；卸载后由原生选择器接回。
+**客户端发现**：默认 bundle 必须挂载包根 `@lolkda/dsh-agent-team-model-pin`，不能使用 `/web` 子路径。DSH 的客户端扫描器会跳过包子路径，即使该 Host 行显示 active。浏览器工件为 `dist/client.js`；1.4.0 只注册命令菜单，主模型插槽始终由原生插件持有。
 
-**1.1.2 修复插槽优先级**：DSH 单插槽按 priority 升序选中最低值，原生选择器是 0。插件现使用 **-100**，而不是会被原生控件遮住的 100。测试通过真实 DSH `SlotCore` 选出组件后再用 React 渲染，并验证卸载恢复原生选择器，不再用假注册器预设插件获胜。
+**历史 1.1.2 插槽修复**：旧选择器曾以 priority -100 替换原生控件。此方案及其专用布局测试在 1.4.0 被撤销，改由原生命令菜单回归验证。
 
 卸载：
 
@@ -123,7 +121,7 @@ plugin_manager action=remove_bundle target=@lolkda/dsh-agent-team-model-pin
 - 新增真实原生模型目录、SlotRegistry/renderer 与原生回退组件的冷/热目录测试。旧 UI 测试的假 `directoryFor()` 没有覆盖这一调用链，不能再用它单独证明 UI 可用。
 - 1.2.2 的 Host 冷启动修复保留；没有重新安装核心 SDK，没有改 Host 模型同步、settings 或历史会话。
 
-安装后要在当前页面真正展开菜单，确认四项控制均存在并能保存。只看到 bundle enabled 或注册瞬间 active 不算界面验收；已出错的旧 Client 需要加载新版本，必要时刷新原页面。若管理器返回 restart-required，新 Host 尚未生效，按安装结果处理，不把刷新浏览器当作 Host 重启。
+以上是历史 1.2.3 的四项菜单验收。1.4.0 安装后应改为检查 `/team-model`、`/team-effort` 原生面板能打开并保存，且主模型控件仍由 DSH 原生插件提供。只看到 bundle enabled 不算界面验收；若管理器返回 restart-required，应重启 DSH 再刷新浏览器，不把刷新浏览器当作 Host 重启。
 
 ## 命令仍然保留
 
@@ -133,7 +131,7 @@ plugin_manager action=remove_bundle target=@lolkda/dsh-agent-team-model-pin
 /team-model clear
 ```
 
-`show`（或无参数）只读查看配置；`set` 在写入前校验 route 与 effort，非法输入不写入。`clear` 只移除运行期层，若组合层仍有钉会明确说明；菜单的「跟随主 Agent」则可显式覆盖组合层。
+`show` 只读查看配置；非 Web 调用不带参数时也沿用 show，Web 中裸命令改为打开原生选择面板。`set` 在写入前校验 route 与 effort，非法输入不写入。`clear` 只移除运行期层，若组合层仍有钉会明确说明；原生菜单的「跟随主 Agent」则可显式覆盖组合层。
 
 ## 高级配置
 
@@ -180,7 +178,7 @@ UI 复用 `settings.describe/mutate`，组合元数据只取不可变 `base`，�
 | `npm run smoke:dist` | 检查两个 Host 入口与浏览器脚本语法 |
 | `npm pack --dry-run` | `prepare` 自动构建后核对发布文件 |
 
-测试需要 Node 24（直接导入可擦除 TypeScript）。浏览器使用 Harness 的共享 React、React DOM 与原生图标，**不打包第二份 React/React DOM**。单面板保持原生 ModelSelect 的布局与主题规范。测试使用真实 Cordis、SlotCore、React DOM 和 jsdom，覆盖注入、点击、返回、焦点和保存；纯几何测试覆盖窄视口边界。它们不代替真实手机/pad 的布局与触控验收。
+测试需要 Node 24（直接导入可擦除 TypeScript）。插件客户端本身不包含 React 组件、CSS 或 DOM 操作，选择面板由 DSH 提供。测试使用真实 Cordis、CommandUiRuntime、PopupSelectController、原生 PopupSelectView、模型目录及 Slot renderer，在 React/jsdom 中覆盖命令碰撞、搜索、键盘选择、错误/重试、关闭、单次提交和会话隔离。传输、会话 IO、图标和布局容器是测试夹具；原生排序代码直接取自已安装 DSH，不伪造模糊匹配。它们不代替当前运行页面或手机/pad 的实际布局验收。
 
 `dist/` 不提交进 Git，但 `prepare` 自动构建。npm 包只含 `dist`、bundle patch、README、LICENSE 和 package metadata，不含源代码、测试或开发依赖。
 
@@ -188,7 +186,7 @@ UI 复用 `settings.describe/mutate`，组合元数据只取不可变 `base`，�
 
 ### 集成测试不能被静默跳过
 
-`native-client`、`cold-start`、`web-restart` 三个套件在机器上没有 DSH 安装时会 `skip`，而 `node --test` 仍然退出 0。CI 与发布工作流因此都会先安装 `@deepseek-ai/dsh`、显式固定 `DSH_TEST_INSTALL_ROOT`，再用 TAP 摘要断言 `# skipped 0`；跳过即为失败。本地想跑完整门禁：
+`native-commands`、`compatibility`、`cold-start`、`web-restart` 套件在机器上没有 DSH 安装时会 `skip`，而 `node --test` 仍然退出 0。CI 与发布工作流因此都会先安装 `@deepseek-ai/dsh`、显式固定 `DSH_TEST_INSTALL_ROOT`，再用 TAP 摘要断言 `# skipped 0`；跳过即为失败。本地想跑完整门禁：
 
 ```bash
 # 版本从 package.json 读，避免门禁和实际发布的包对不上

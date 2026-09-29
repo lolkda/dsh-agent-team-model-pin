@@ -1,6 +1,6 @@
 import { build } from 'esbuild';
 
-// Browser artifact uses the Harness module table, never its own React copy.
+// Browser artifact registers native command policies; it contains no React UI.
 await build({
   entryPoints: ['src/client.ts'],
   outfile: 'dist/client.js',
@@ -8,7 +8,7 @@ await build({
   platform: 'browser',
   format: 'cjs',
   target: 'es2022',
-  external: ['react', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives'],
+  external: [],
   banner: { js: `window.__ModuleLoader__.load({id:"@lolkda/dsh-agent-team-model-pin",factory(require){const module={exports:{}};const exports=module.exports;` },
   footer: { js: '\nreturn module.exports;}});' },
   logLevel: 'info',

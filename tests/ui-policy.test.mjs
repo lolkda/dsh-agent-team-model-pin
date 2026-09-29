@@ -148,39 +148,10 @@ test('UI: a composition pin in base.sessions is honored when the resolved layer 
   assert.equal(ui.teamSessionKey('broken', { binding: () => ({ session: { getSnapshot: () => { throw new Error('gone'); } } }) }), 'broken');
 });
 
- test('UI: late responses from a previous session are ignored', () => {
-  assert.equal(typeof ui?.isCurrentRequest, 'function');
-  assert.equal(ui.isCurrentRequest({ sessionId: 'A', generation: 1 }, { sessionId: 'B', generation: 2 }), false);
-  assert.equal(ui.isCurrentRequest({ sessionId: 'B', generation: 1 }, { sessionId: 'B', generation: 2 }), false);
-  assert.equal(ui.isCurrentRequest({ sessionId: 'B', generation: 2 }, { sessionId: 'B', generation: 2 }), true);
-});
-
 test('UI: command description accurately reports follow and model-default modes', () => {
   assert.match(pin.describePin({ followLeader: true }), /跟随主 Agent/);
   assert.match(pin.describePin({ provider: 'p', model: 'm', modelDefault: true }), /模型默认/);
 });
 
-const copy = { model: 'Model', effort: 'Effort', teamModel: 'Team model', teamEffort: 'Team effort', follow: 'Follow main Agent', modelDefault: 'Model default', unsupported: 'Not supported', unavailable: 'Select model' };
-test('UI menu: retains the main controls and adds two Team controls in the same menu', () => {
-  assert.equal(typeof ui?.buildMenu, 'function');
-  const menu = ui.buildMenu(groups, { provider: 'p', model: 'm', reasoningEffort: 'high' }, undefined, copy);
-  assert.deepEqual(menu.map((row) => row.id), ['main-model', 'main-effort', 'team-divider', 'team-model', 'team-effort']);
-  assert.equal(menu[3].value, 'Follow main Agent');
-  assert.equal(menu[3].submenu[0].id, '["team-follow"]');
-  assert.equal(menu[3].submenu[1].detail, 'Provider');
-  assert.equal(menu[4].submenu.some((row) => row.id === '["team-effort","low"]'), true);
-});
-
-test('UI menu: read-only Team settings do not disable main-model selection', () => {
-  assert.equal(typeof ui?.buildMenu, 'function');
-  const menu = ui.buildMenu(groups, { provider: 'p', model: 'm' }, undefined, copy, false, true);
-  assert.equal(menu[0].disabled, false);
-  assert.equal(menu[3].disabled, true);
-});
-
-test('UI menu: a plain model never offers arbitrary reasoning levels', () => {
-  assert.equal(typeof ui?.buildMenu, 'function');
-  const menu = ui.buildMenu(groups, { provider: 'p', model: 'm' }, { provider: 'p', model: 'plain' }, copy);
-  assert.equal(menu[4].disabled, true);
-  assert.equal(menu[4].value, 'Not supported');
-});
+// Native command integration now covers catalog rendering, read-only state,
+// supported effort rows, and retention of the untouched main model selector.

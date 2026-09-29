@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 
@@ -31,11 +31,15 @@ test('packaging: the browser artifact registers the exact package module without
   assert.equal(typeof registration.factory, 'function');
 });
 
-test('packaging: the popup uses the shared React DOM runtime, never a bundled second copy', async () => {
-  assert.ok(pkg.dsh.client.external.includes('react-dom'));
+test('packaging: native command menus ship no custom React picker or stylesheet', async () => {
+  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-commands'));
   const code = await readFile(new URL('../dist/client.js', import.meta.url), 'utf8');
-  assert.match(code, /require\(["']react-dom["']\)/);
-  assert.doesNotMatch(code, /node_modules\/react-dom\/cjs/);
+  assert.doesNotMatch(code, /require\(["']react(?:-dom)?["']\)|atmp-trigger|data-atmp-pane|createPortal/);
+});
+
+test('packaging: rebuilt dist contains no retired picker modules', async () => {
+  const files = await readdir(new URL('../dist/', import.meta.url));
+  assert.deepEqual(files.filter(name => /^(model-picker|picker-layout|client-runtime)\./.test(name)), []);
 });
 
 test('packaging: core SDKs remain host-owned instead of shadowing profile registry rows', () => {
