@@ -4,6 +4,28 @@ DSH Agent Team 模型选择插件。**1.4.0 起通过原生 `/team-model` 和 `/
 
 源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。
 
+## 1.5.0-rc.1：为新队友指定 Agent 预设（候选版）
+
+**模型与思考等级继续兼容原有宿主；新增预设功能需要宿主的创建前接口，原版 DSH `0.2.0-rc.2` 不具备。**
+
+本包不会修改官方包、替换运行中的工厂、安装第二份 SDK，也不会在 `agent/created` 后偷偷换预设。随包提供 `patches/` 下可审查的宿主扩展补丁，需由宿主维护者单独应用、验证及重启；或者使用实现相同接口的 DSH。接口按 `subagents.childSetupVersion === 1` 和 `registerChildSetup()` 实际能力检测，不能只靠版本号判断。未经扩展的宿主仍能使用 `/team-model`、`/team-effort`，但 `/team-preset` 保存会明确报错并保持零写入。
+
+### 使用与生效边界
+
+**只需输入 `/team-preset`，在原生弹层搜索并选择预设。** 不需要填写 ID 或参数。
+
+列表包含「跟随主 Agent」和可用的 Agent 预设，当前选择带标记；点击或按 Enter 即可保存。只保留这一种用户交互，不提供文字子命令或非 Web 命令行配置入口。
+
+- 这是 **Agent 预设组合**，不是在任务 prompt 里写一段角色描述。目标预设的工具、提示词和初始化应在队友首次发布之前就生效。
+- 以 Lead 会话 ID 保存；从子会话选择也配置同一个 Team。只影响之后新建的队友，不改变 Lead、已有队友或普通非 Team subagent；不受模型设置的 `scope=members/all` 扩大影响。
+- 每个队友创建时确定预设身份；`fresh` 和 `fork` 都适用。fork 的历史保留，不把父历史里旧的预设选择当作子会话的新选择。
+- 冷恢复读取队友自身保存的身份，不读取后来修改的 Team 创建策略。预设定义的版本仍遵守 DSH 本身的加载机制，本功能不永久归档完整 preset YAML/插件代码。
+- 保留子 Agent 已有的沙箱、审批策略、persona/toolFilter 等限制。不从 Lead 复制额外工具来规避目标预设的能力边界。Team 协作工具应按 DSH 的 Host 组合提供。
+- 指定预设不存在、无法加载或宿主缺少必要接口时明确失败，不静默使用另一个预设。保存时及实际创建时均须验证，保存成功不保证未来被删除的 preset 仍能创建。
+- 面板保存时由 Host 校验预设和宿主能力，并检查配置版本；发生冲突时重新打开面板即可。
+
+预设与模型、思考等级分开保存，不会相互覆盖。开发配置和验收细节见 [预设功能规范](docs/PRESET-SPEC.md)。
+
 ## 1.3.1：取消 DSH 版本绑定，验证 0.2.0-rc.2
 
 - 运行时 `@deepseek-ai/dsh-agent` 为 optional peer `*`，不再绑定到 `0.1.7-rc.1`，无需 `dsh plugin allow-version`。DSH 的兼容检查包含预发布版本，因此 `0.2.0-rc.2` 也不会被版本号拦截。

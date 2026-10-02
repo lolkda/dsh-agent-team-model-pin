@@ -1,5 +1,6 @@
 /** Web half: contribute data/actions to DSH's native slash-command popups. */
 import { applyTeamPin } from './pin.ts';
+import { installPresetCommand } from './preset-client.ts';
 import type { Pin } from './pin.ts';
 import { CLIENT_VERSION, SETTINGS_NS, choiceId, effortPin, findModel, modelPin, readTeamPin, teamSessionKey, writeTeamPin } from './ui-state.ts';
 import type { ProviderGroup, Selection, SessionsLike, SettingsRemote } from './ui-state.ts';
@@ -92,6 +93,7 @@ export const inject = ['commandUi', 'locale', 'modelDirectories', 'sessions', 'r
 
 /** Register native popup policies without installing a component or stylesheet. */
 export function apply(ctx: ClientContext): void {
+  installPresetCommand(ctx);
   ctx.effect(() => ctx.locale.register('agentTeamModelPin', { zh, en }));
   const t = ctx.locale.bind('agentTeamModelPin');
   const commands = ctx.commandUi;

@@ -1,0 +1,327 @@
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -780,7 +780,9 @@
+ 	* @param ctx - context providing Agents, Sessions, and teardown ownership.
+ 	* @param observeActivation - build the lifecycle observer for one residency epoch.
+ 	*/
+-	constructor(ctx, observeActivation, maxActiveSubagents) {
++	prepareChildSetup;
++	constructor(ctx, observeActivation, maxActiveSubagents, prepareChildSetup) {
++		this.prepareChildSetup = prepareChildSetup;
+ 		this.ctx = ctx;
+ 		this.observeActivation = observeActivation;
+ 		this.maxActiveSubagents = maxActiveSubagents;
+@@ -1065,12 +1067,38 @@
+ 	async materializeTracked(inputs, parentLineage, pool, releaseSlot) {
+ 		const { childId, provider, parent, create } = inputs;
+ 		inputs.signal.throwIfAborted();
+-		const setup = (childCtx, child) => {
++		const setup = async (childCtx, child) => {
+ 			if (create !== void 0) {
+ 				child.session.append("subagent/descriptor", create.descriptor);
+ 				appendDelegatedPolicyOverrides(child.session, create.delegatedPolicies);
+ 			}
+ 			applyChildComposition(childCtx, parent, inputs.composition);
++			// Restore the child's durable identity even when the selecting plugin was removed.
++			// Parent fork events are not the child's selection; its header is the fallback.
++			if (create === undefined) {
++			    let presetId = child.session.header.agentPreset;
++			    for (const event of child.session.snapshotEvents(child.session.inheritedEventCount)) {
++			        if (event.type === 'agent-preset/selected') {
++			            if (typeof event.data?.agentPreset !== 'string' || event.data.agentPreset.length === 0) {
++			                throw new Error('Invalid persisted child agent-preset selection');
++			            }
++			            presetId = event.data.agentPreset;
++			        }
++			    }
++			    if (presetId !== undefined) {
++			        const presets = childCtx.get('agentPresets');
++			        if (presets === undefined) throw new Error('Cannot restore child preset without agentPresets');
++			        inputs.signal.throwIfAborted();
++			        await presets.mount(childCtx, presetId);
++			        inputs.signal.throwIfAborted();
++			    }
++			}
++			// Run before agent/created dispatch snapshots preset-scoped listeners.
++			return await this.prepareChildSetup({
++			    childCtx, child, parent,
++			    source: create === undefined ? 'resume' : 'startup',
++			    signal: inputs.signal,
++			});
+ 		};
+ 		const observer = this.observeActivation(provider, childId, parent);
+ 		const handle = create === void 0 ? await this.ownerCtx.agents.resume({
+@@ -1659,7 +1687,7 @@
+ 	constructor(ctx, host, maxActiveSubagents) {
+ 		this.ctx = ctx;
+ 		this.host = host;
+-		this.activations = new ContinuableActivationRegistry(ctx, (provider, childId, parent) => host.observeActivation(provider, childId, parent), maxActiveSubagents);
++		this.activations = new ContinuableActivationRegistry(ctx, (provider, childId, parent) => host.observeActivation(provider, childId, parent), maxActiveSubagents, payload => host.prepareChildSetup(payload));
+ 	}
+ 	/**
+ 	* Start one continuable background child and resolve at initial inbox acceptance.
+@@ -2823,6 +2851,7 @@
+ 			maxActiveSubagents: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8).volatile()
+ 		});
+ 		providers = /* @__PURE__ */ new Map();
++		childSetupHooks = new Set();
+ 		continuations;
+ 		/**
+ 		* The contained lifecycle-edge publisher. Built here because scoped dispatch
+@@ -2837,7 +2866,8 @@
+ 			ctx.inject(["agents"], (childCtx) => {
+ 				const manager = new SubagentContinuationManager(childCtx, {
+ 					prepareContinuable: (name, request) => this.prepareContinuable(name, request),
+-					observeActivation: (provider, childId, parent) => this.observeActivation(provider, childId, parent)
++					observeActivation: (provider, childId, parent) => this.observeActivation(provider, childId, parent),
++					prepareChildSetup: payload => this.prepareChildSetup(payload)
+ 				}, () => this.config.maxActiveSubagents.get());
+ 				this.continuations = manager;
+ 				childCtx.effect(() => () => {
+@@ -2855,6 +2885,47 @@
+ 				installSubagentArchiveAdmission(agentsCtx);
+ 			});
+ 		}
++		/** Versioned, native, pre-publication continuable-child setup capability. */
++		get childSetupVersion() { return 1; }
++		/** Register trusted composition-only setup; its calling fiber owns the registration. */
++		registerChildSetup(callback) {
++		    if (typeof callback !== 'function') throw new TypeError('Child setup callback must be a function');
++		    const entry = { callback, active: true };
++		    return this.ctx.effect(function* () {
++		        this.childSetupHooks.add(entry);
++		        yield () => { entry.active = false; this.childSetupHooks.delete(entry); };
++		    }.bind(this), 'subagents.registerChildSetup()');
++		}
++		/** Snapshot registrations once; owner disposal during preparation fails closed. */
++		async prepareChildSetup(payload) {
++		    const entries = [...this.childSetupHooks];
++		    const commits = [];
++		    const assertCurrent = () => {
++		        payload.signal.throwIfAborted();
++		        if (entries.some(entry => !entry.active)) throw new Error('Child setup owner disposed during initialization');
++		    };
++		    assertCurrent();
++		    for (const entry of entries) {
++		        const prepared = await entry.callback(payload);
++		        assertCurrent();
++		        if (prepared !== undefined) {
++		            if (prepared === null || typeof prepared.commit !== 'function') throw new TypeError('Child setup must return void or a synchronous commit');
++		            commits.push(() => prepared.commit());
++		        }
++		    }
++		    return { commit() {
++		        assertCurrent();
++		        for (const commit of commits) {
++		            const returned = commit();
++		            // Do not let an async commit escape the publication transaction.
++		            if (returned !== undefined) {
++		                if (returned && typeof returned.then === 'function') void Promise.resolve(returned).catch(() => {});
++		                throw new TypeError('Child setup commit must be synchronous and return void');
++		            }
++		            assertCurrent();
++		        }
++		    } };
++		}
+ 		/**
+ 		* Resolve a delegation tool's depth policy against the current user setting.
+ 		* @param configured - Explicit tool limit, or provider-managed for external delegation.
+--- a/lib/types/index.js
++++ b/lib/types/index.js
+@@ -77,6 +77,7 @@
+             maxActiveSubagents: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(8).volatile(),
+         });
+         providers = new Map();
++        childSetupHooks = new Set();
+         continuations;
+         /**
+          * The contained lifecycle-edge publisher. Built here because scoped dispatch
+@@ -92,6 +93,7 @@
+                 const manager = new SubagentContinuationManager(childCtx, {
+                     prepareContinuable: (name, request) => this.prepareContinuable(name, request),
+                     observeActivation: (provider, childId, parent) => this.observeActivation(provider, childId, parent),
++                    prepareChildSetup: payload => this.prepareChildSetup(payload),
+                 }, () => this.config.maxActiveSubagents.get());
+                 this.continuations = manager;
+                 childCtx.effect(() => () => {
+@@ -110,6 +112,47 @@
+             // children descend from a Session and how a parent stops them.
+             ctx.inject(['agents'], (agentsCtx) => { installSubagentArchiveAdmission(agentsCtx); });
+         }
++        /** Versioned, native, pre-publication continuable-child setup capability. */
++        get childSetupVersion() { return 1; }
++        /** Register trusted composition-only setup; its calling fiber owns the registration. */
++        registerChildSetup(callback) {
++            if (typeof callback !== 'function') throw new TypeError('Child setup callback must be a function');
++            const entry = { callback, active: true };
++            return this.ctx.effect(function* () {
++                this.childSetupHooks.add(entry);
++                yield () => { entry.active = false; this.childSetupHooks.delete(entry); };
++            }.bind(this), 'subagents.registerChildSetup()');
++        }
++        /** Snapshot registrations once; owner disposal during preparation fails closed. */
++        async prepareChildSetup(payload) {
++            const entries = [...this.childSetupHooks];
++            const commits = [];
++            const assertCurrent = () => {
++                payload.signal.throwIfAborted();
++                if (entries.some(entry => !entry.active)) throw new Error('Child setup owner disposed during initialization');
++            };
++            assertCurrent();
++            for (const entry of entries) {
++                const prepared = await entry.callback(payload);
++                assertCurrent();
++                if (prepared !== undefined) {
++                    if (prepared === null || typeof prepared.commit !== 'function') throw new TypeError('Child setup must return void or a synchronous commit');
++                    commits.push(() => prepared.commit());
++                }
++            }
++            return { commit() {
++                assertCurrent();
++                for (const commit of commits) {
++                    const returned = commit();
++                    // Do not let an async commit escape the publication transaction.
++                    if (returned !== undefined) {
++                        if (returned && typeof returned.then === 'function') void Promise.resolve(returned).catch(() => {});
++                        throw new TypeError('Child setup commit must be synchronous and return void');
++                    }
++                    assertCurrent();
++                }
++            } };
++        }
+         /**
+          * Resolve a delegation tool's depth policy against the current user setting.
+          * @param configured - Explicit tool limit, or provider-managed for external delegation.
+--- a/lib/types/continuation.js
++++ b/lib/types/continuation.js
+@@ -89,7 +89,7 @@
+     constructor(ctx, host, maxActiveSubagents) {
+         this.ctx = ctx;
+         this.host = host;
+-        this.activations = new ContinuableActivationRegistry(ctx, (provider, childId, parent) => host.observeActivation(provider, childId, parent), maxActiveSubagents);
++        this.activations = new ContinuableActivationRegistry(ctx, (provider, childId, parent) => host.observeActivation(provider, childId, parent), maxActiveSubagents, payload => host.prepareChildSetup(payload));
+     }
+     /**
+      * Start one continuable background child and resolve at initial inbox acceptance.
+--- a/lib/types/continuation-activation.js
++++ b/lib/types/continuation-activation.js
+@@ -78,7 +78,9 @@
+      * @param ctx - context providing Agents, Sessions, and teardown ownership.
+      * @param observeActivation - build the lifecycle observer for one residency epoch.
+      */
+-    constructor(ctx, observeActivation, maxActiveSubagents) {
++    prepareChildSetup;
++    constructor(ctx, observeActivation, maxActiveSubagents, prepareChildSetup) {
++        this.prepareChildSetup = prepareChildSetup;
+         this.ctx = ctx;
+         this.observeActivation = observeActivation;
+         this.maxActiveSubagents = maxActiveSubagents;
+@@ -437,7 +439,7 @@
+     async materializeTracked(inputs, parentLineage, pool, releaseSlot) {
+         const { childId, provider, parent, create } = inputs;
+         inputs.signal.throwIfAborted();
+-        const setup = (childCtx, child) => {
++        const setup = async (childCtx, child) => {
+             // Only fresh creation appends the descriptor and delegated policy after
+             // the inherited marker; a cold resume replays those persisted events.
+             if (create !== undefined) {
+@@ -445,6 +447,32 @@
+                 appendDelegatedPolicyOverrides(child.session, create.delegatedPolicies);
+             }
+             applyChildComposition(childCtx, parent, inputs.composition);
++            // Restore the child's durable identity even when the selecting plugin was removed.
++            // Parent fork events are not the child's selection; its header is the fallback.
++            if (create === undefined) {
++                let presetId = child.session.header.agentPreset;
++                for (const event of child.session.snapshotEvents(child.session.inheritedEventCount)) {
++                    if (event.type === 'agent-preset/selected') {
++                        if (typeof event.data?.agentPreset !== 'string' || event.data.agentPreset.length === 0) {
++                            throw new Error('Invalid persisted child agent-preset selection');
++                        }
++                        presetId = event.data.agentPreset;
++                    }
++                }
++                if (presetId !== undefined) {
++                    const presets = childCtx.get('agentPresets');
++                    if (presets === undefined) throw new Error('Cannot restore child preset without agentPresets');
++                    inputs.signal.throwIfAborted();
++                    await presets.mount(childCtx, presetId);
++                    inputs.signal.throwIfAborted();
++                }
++            }
++            // Run before agent/created dispatch snapshots preset-scoped listeners.
++            return await this.prepareChildSetup({
++                childCtx, child, parent,
++                source: create === undefined ? 'resume' : 'startup',
++                signal: inputs.signal,
++            });
+         };
+         const observer = this.observeActivation(provider, childId, parent);
+         const handle = create === undefined
+--- a/lib/types/types.d.ts
++++ b/lib/types/types.d.ts
+@@ -22,6 +22,20 @@
+  * @returns the same string, branded.
+  */
+ export declare function SubagentRunId(id: string): SubagentRunId;
++
++/** Trusted unpublished child setup. No Agent driving or publication is allowed here. */
++export interface ChildSetupContext {
++    readonly childCtx: import('@deepseek-ai/cordis').Context;
++    readonly child: Agent;
++    readonly parent: Agent;
++    readonly source: 'startup' | 'resume';
++    readonly signal: AbortSignal;
++}
++/** Composition prepared now, with a synchronous factory-publication guard if needed. */
++export type ChildSetupCallback = (payload: ChildSetupContext) =>
++    void | import('@deepseek-ai/dsh-agent').AgentSetupCommit |
++    Promise<void | import('@deepseek-ai/dsh-agent').AgentSetupCommit>;
++
+ /** What a caller asks for when starting a continuable background child. */
+ export interface ContinuableStartSpec {
+     /** The `ctx.subagents` provider whose continuable-creation capability establishes the child. */
+--- a/lib/types/index.d.ts
++++ b/lib/types/index.d.ts
+@@ -45,7 +45,7 @@
+ export * from './out-of-process.ts';
+ export { AssistantOutputFold, finalAssistantOutput } from './assistant-output.ts';
+ export { SubagentRunId } from './types.ts';
+-export type { ContinuableCreateRequest, ContinuableCreateSpec, ContinuableStart, ContinuableStartSpec, ResolvedSubagentStartRequest, SubagentCapabilities, SubagentInterruptAuthority, SubagentProvider, SubagentResult, SubagentRun, SubagentSendMessageOptions, SubagentStartRequest, SubagentStopReason, SubagentStopReasonMap, } from './types.ts';
++export type { ChildSetupContext, ChildSetupCallback, ContinuableCreateRequest, ContinuableCreateSpec, ContinuableStart, ContinuableStartSpec, ResolvedSubagentStartRequest, SubagentCapabilities, SubagentInterruptAuthority, SubagentProvider, SubagentResult, SubagentRun, SubagentSendMessageOptions, SubagentStartRequest, SubagentStopReason, SubagentStopReasonMap, } from './types.ts';
+ export { foldSubagentDescriptor, snapshotSubagentDescriptor, SUBAGENT_DESCRIPTOR_VERSION, } from './descriptor.ts';
+ export type { ContinuableSubagentDescriptorData, ContinuableSubagentDescriptorInput, OneShotSubagentDescriptorData, OneShotSubagentDescriptorInput, SubagentDescriptorData, SubagentDescriptorInput, } from './descriptor.ts';
+ export type { SubagentCatalogEntry } from './projection-types.ts';
+@@ -129,6 +129,11 @@
+      * @param configured - Explicit tool limit, or provider-managed for external delegation.
+      * @returns The numeric limit, or undefined when the provider owns depth enforcement.
+      */
++    /** Native unpublished continuable child setup protocol; absent in stock rc.2. */
++    readonly childSetupVersion: 1;
++    registerChildSetup(callback: import('./types.ts').ChildSetupCallback): () => void;
++    private childSetupHooks;
++    private prepareChildSetup;
+     resolveMaxDepth(configured?: number | 'provider-managed'): number | undefined;
+     /**
+      * Establish one durable continuable child and deliver its initial prompt.
+--- a/lib/types/continuation.d.ts
++++ b/lib/types/continuation.d.ts
+@@ -20,6 +20,7 @@
+ import type { ContinuableCreateRequest, ContinuableCreateSpec, ContinuableStart, ContinuableStartSpec, SubagentInterruptAuthority, SubagentSendMessageOptions } from './types.ts';
+ /** Package-private hooks supplied by the owning service. */
+ interface ContinuationHost {
++    prepareChildSetup(payload: import('./types.ts').ChildSetupContext): Promise<import('@deepseek-ai/dsh-agent').AgentSetupCommit>;
+     /** Resolve one provider's detached continuable-creation contribution. */
+     prepareContinuable(name: string, request: ContinuableCreateRequest): Promise<ContinuableCreateSpec>;
+     /** Build the lifecycle observer for one Activation residency epoch. */
+--- a/lib/types/continuation-activation.d.ts
++++ b/lib/types/continuation-activation.d.ts
+@@ -138,7 +138,7 @@
+      * @param ctx - context providing Agents, Sessions, and teardown ownership.
+      * @param observeActivation - build the lifecycle observer for one residency epoch.
+      */
+-    constructor(ctx: Context, observeActivation: (provider: string, childId: SessionId, parent: Agent) => ActivationObserver, maxActiveSubagents: () => number);
++    constructor(ctx: Context, observeActivation: (provider: string, childId: SessionId, parent: Agent) => ActivationObserver, maxActiveSubagents: () => number, prepareChildSetup: (payload: import('./types.ts').ChildSetupContext) => Promise<import('@deepseek-ai/dsh-agent').AgentSetupCommit>);
+     /**
+      * Return the live Activation for a durable child id, if resident.
+      * @param childId - durable child session id to look up.

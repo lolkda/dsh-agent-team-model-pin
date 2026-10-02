@@ -771,3 +771,15 @@ test('11b 命令空输入等价于 show；effects 中登记了命令注册（5.2
   assert.equal(empty.text, show.text);
   assert.ok(h.effects.length >= 1, '命令注册应作为 ctx.effect 登记，以便随 fiber 释放');
 });
+test('preset command is registered alongside model command; stock Host refuses preset writes', async (t) => {
+  const h = makeHarness();
+  t.after(h.cleanup);
+  const preset = h.commandDefinitions.get('team-preset');
+  assert.ok(preset);
+  assert.equal(preset.input, undefined);
+  const result = await preset.handler({ agent: leadAgent, rawInput: 'apply 1 "coder"', signal: new AbortController().signal });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /childSetupVersion=1/);
+  assert.equal(h.mutateCalls.length, 0);
+  assert.equal(h.commandDefinitions.get('team-model').name, 'team-model');
+});

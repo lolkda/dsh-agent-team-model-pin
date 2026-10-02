@@ -125,3 +125,19 @@ test('rc.1 settings: non-volatile configuration is not writable from the setting
   const h = await harness(t);
   await assert.rejects(h.service.mutate(NS, [{ op: 'set', path: ['auditPath'], value: '/tmp/elsewhere.jsonl' }]), /not volatile|volatile/i);
 });
+
+test('preset settings: nullable policy is live and independent of model set/clear paths', async (t) => {
+  const h = await harness(t, { scope: 'teammates', defaults: {}, sessions: {}, presetDefault: 'coder', presetSessions: {} });
+  const ref = h.fiber.config.presetSessions;
+  await h.service.mutate(NS, [{ op: 'set', path: ['presetSessions', 'lead-A'], value: null }]);
+  assert.equal(h.fiber.config.presetSessions, ref);
+  assert.deepEqual(ref.get(), { 'lead-A': null });
+  await h.service.mutate(NS, [{ op: 'set', path: ['sessions', 'lead-A'], value: { provider: 'p', model: 'm' } }]);
+  await h.service.mutate(NS, [{ op: 'unset', path: ['sessions', 'lead-A'] }]);
+  assert.deepEqual(ref.get(), { 'lead-A': null });
+  await h.service.mutate(NS, [{ op: 'set', path: ['presetSessions', 'lead-A'], value: 'reviewer' }]);
+  assert.deepEqual(ref.get(), { 'lead-A': 'reviewer' });
+  await h.service.mutate(NS, [{ op: 'unset', path: ['presetSessions', 'lead-A'] }]);
+  assert.deepEqual(ref.get(), {});
+  assert.equal(h.fiber.config.presetDefault.get(), 'coder');
+});

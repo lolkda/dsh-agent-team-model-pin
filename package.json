@@ -1,7 +1,7 @@
 {
   "name": "@lolkda/dsh-agent-team-model-pin",
-  "version": "1.4.0",
-  "description": "DSH Host/Web plugin: choose per-session Agent Team models and reasoning effort through native slash-command menus",
+  "version": "1.5.0-rc.1",
+  "description": "DSH Host/Web plugin: choose Team models, reasoning effort and creation-time Agent presets with native command menus",
   "keywords": [
     "dsh",
     "deepseek-harness",
@@ -12,7 +12,8 @@
     "teammate",
     "llm",
     "model",
-    "reasoning-effort"
+    "reasoning-effort",
+    "agent-preset"
   ],
   "type": "module",
   "engines": {
@@ -37,7 +38,8 @@
     "dist",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "patches"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
@@ -62,20 +64,28 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.5",
     "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
     "@deepseek-ai/dsh-agent-loop": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-agent-preset-registry": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-store": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
     "@deepseek-ai/dsh-experimental-agent-team": "0.2.0-rc.2",
     "@deepseek-ai/dsh-experimental-client-ui-agent-team": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-experimental-tool-agent-team": "0.2.0-rc.2",
     "@deepseek-ai/dsh-invariants": "0.2.0-rc.2",
     "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
     "@deepseek-ai/dsh-scope": "0.2.0-rc.2",
     "@deepseek-ai/dsh-session": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.0-rc.2",
     "@deepseek-ai/dsh-session-projection": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-session-query": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-subagent": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-subagent-spawn-in-process": "0.2.0-rc.2",
     "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
     "@deepseek-ai/dsh-util-values": "0.2.0-rc.2",
     "@types/node": "^26.6.2",

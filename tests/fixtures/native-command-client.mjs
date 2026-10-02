@@ -72,6 +72,7 @@ class RemoteFacade extends Service {
   get session() { return this.ctx['remote.session']; }
   get settings() { return this.ctx['remote.settings']; }
   get commands() { return this.ctx['remote.commands']; }
+  get agentPresets() { return this.ctx['remote.agentPresets']; }
 }
 
 export async function mount(t, options = {}) {
@@ -79,7 +80,7 @@ export async function mount(t, options = {}) {
   const root = new Context();
   const container = win.document.createElement('div');
   win.document.body.append(container);
-  const calls = { settings: [], main: [], executed: [], consumed: [], focused: 0, catalog: 0 };
+  const calls = { settings: [], main: [], executed: [], consumed: [], focused: 0, catalog: 0, presetCatalog: 0, presetWrites: [] };
   const errors = [], consoleErrors = [];
   consoleSink = consoleErrors;
   const bindings = new Map(), projections = new Map(), listeners = new Set();
@@ -102,6 +103,29 @@ export async function mount(t, options = {}) {
   })) }];
   let view = { ns: 'agent-team-model-pin', revision: 1,
     base: { scope: 'teammates', defaults: {}, sessions: {} }, value: { sessions: {} }, ...options.view };
+  // This remains a Host RPC seam, not a fake native popup: actual DSH command
+  // discovery, decoration, popup, search, selection and token handling run below.
+  const presetRows = options.presetRows ?? [
+    { id: 'standard', name: 'Standard', description: 'Main tools', isDefault: true },
+    { id: 'reviewer', name: 'Reviewer', description: 'Review tools', isDefault: false },
+    { id: 'broken', name: 'Broken', broken: 'activation failed', isDefault: false },
+  ];
+  const commandResult = (kind, text) => ({ ok: true, value: { result: { kind, text } } });
+  const applyPresetCommand = async (leadId, revision, choice, signal) => {
+    if (options.presetSupported === false) return commandResult('error', 'Team preset runtime unsupported; install the pre-publication hook');
+    if (options.readOnly) return commandResult('error', 'settings/read-only');
+    if (revision !== view.revision) return commandResult('error', 'settings/conflict');
+    if (typeof choice !== 'string' && choice !== null) return commandResult('error', 'invalid preset choice');
+    if (choice !== null && !presetRows.some(row => row.id === choice && row.broken === undefined)) {
+      return commandResult('error', 'preset unavailable');
+    }
+    signal?.throwIfAborted();
+    if (options.presetApply) return options.presetApply(leadId, revision, choice, signal);
+    calls.presetWrites.push({ leadId, revision, choice });
+    view = { ...view, revision: view.revision + 1,
+      value: { ...view.value, presetSessions: { ...view.value.presetSessions, [leadId]: choice } } };
+    return commandResult('success', 'Saved for future teammates; existing teammates unchanged');
+  };
   const ensureSession = async (id) => {
     if (bindings.has(id)) return bindings.get(id);
     const fiber = await root.plugin({ name: `command-session-${id}`, apply() {} });
@@ -137,8 +161,27 @@ export async function mount(t, options = {}) {
     ctx.provide('conversation', { input: { for: () => ({ focus: () => { calls.focused++; } }) } });
     ctx.provide('inputTriggers', { registerSource(value) { slash = value; return () => { slash = undefined; }; } });
     ctx.provide('remote.commands', {
-      list: async () => ({ ok: true, value: [{ name: 'team-model', description: 'Team model', input: { hint: '<provider> <model> [effort]' } }] }),
-      execute: async (...args) => { calls.executed.push(args); return { ok: true, value: { result: { kind: 'success' } } }; },
+      list: async () => ({ ok: true, value: [
+        { name: 'team-model', description: 'Team model', input: { hint: '<provider> <model> [effort]' } },
+        ...(options.teamPreset ? [{ name: 'team-preset', description: 'Team preset for new teammates' }] : []),
+      ] }),
+      execute: async (...args) => {
+        calls.executed.push(args);
+        const [leadId, line, attachments, signal] = args;
+        if (options.teamPreset && line.startsWith('/team-preset apply ')) {
+          assert.deepEqual(Array.from(attachments), []);
+          const match = /^\/team-preset apply (\d+) ([\s\S]+)$/.exec(line);
+          if (!match) return commandResult('error', 'invalid preset apply command');
+          return applyPresetCommand(leadId, Number(match[1]), JSON.parse(match[2]), signal);
+        }
+        return { ok: true, value: { result: { kind: 'success' } } };
+      },
+    });
+    if (options.teamPreset && !options.omitPresetCatalog) ctx.provide('remote.agentPresets', {
+      async list() {
+        calls.presetCatalog++;
+        return options.presetCatalog?.() ?? { ok: true, value: { presets: presetRows } };
+      },
     });
     ctx.provide('remote.session', {
       async modelCatalog() {
@@ -159,7 +202,7 @@ export async function mount(t, options = {}) {
         if (options.mutate) return options.mutate(...args);
         const [, [op], rev] = structuredClone(args);
         if (rev !== view.revision) return { ok: false, error: { code: 'settings/conflict', message: 'settings/conflict' } };
-        view = { ...view, revision: view.revision + 1, value: { sessions: { ...view.value.sessions, [op.path[1]]: op.value } } };
+        view = { ...view, revision: view.revision + 1, value: { ...view.value, sessions: { ...view.value.sessions, [op.path[1]]: op.value } } };
         return { ok: true, value: view };
       },
     });
@@ -196,7 +239,7 @@ export async function mount(t, options = {}) {
   const click = async (element) => { assert.ok(element); await act(async () => { element.dispatchEvent(new win.MouseEvent('click', { bubbles: true })); }); };
   return {
     root, slots, calls, errors, consoleErrors, container, before, candidateName: candidate.name,
-    popup, enter, click, groups, session,
+    popup, enter, click, groups, presetRows, session,
     occupants: () => slots.snapshot('conversation.input.model')[0].occupants,
     panel: () => container.querySelector('[role="listbox"]'),
     candidates: async (id = currentBinding.key) => slash.candidates(session(id), { query: '', position: 'leading', signal: AbortSignal.timeout(5000) }),

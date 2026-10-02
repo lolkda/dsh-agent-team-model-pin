@@ -1,0 +1,38 @@
+{
+  "package": "@deepseek-ai/dsh-subagent",
+  "version": "0.2.0-rc.2",
+  "files": {
+    "lib/index.js": {
+      "beforeSha256": "75b50b1c9452a6aeb10d1c859e3f45b05e062ea1fad6ed3bcd9577f2bc912541",
+      "afterSha256": "cccf9d54f9369f29ccae419fbe973e86c9777cec2982ae14b869c0a549f51faf"
+    },
+    "lib/types/index.js": {
+      "beforeSha256": "6680967f2c94033cb285e4eab38bcd25d0a16c3f838b70026ef22777bb8acef7",
+      "afterSha256": "4e497e51a9548380483815127b5f620813cf2414fb98478f3407ca79a4d7cc73"
+    },
+    "lib/types/continuation.js": {
+      "beforeSha256": "194cb51d6b58346b3a85310e9a4831a5e29db60035c2b5205adfbb1ffc9a0be6",
+      "afterSha256": "f85e863eb7855276d1716e4a62e88fc5677c5237c7548b9694791a438ec89350"
+    },
+    "lib/types/continuation-activation.js": {
+      "beforeSha256": "0db6fb9c46a78b3d182041713a14ab5174ec9887a733f385d1e9048e125ac670",
+      "afterSha256": "3daf329c6093cbd368561030fa6e6eae81db10cb039699191bfa007c5cb7e058"
+    },
+    "lib/types/types.d.ts": {
+      "beforeSha256": "e5cadbdece5be5c323334fd71cff23db6c193ca2f3f59e378d514ae9d9923a65",
+      "afterSha256": "ec902e3875275c13706ab9fa4fb4f7a202f9f3ba0bf7493c7dfe470bd7d86826"
+    },
+    "lib/types/index.d.ts": {
+      "beforeSha256": "674879b514f8af54213ecc4985cf7a8e8b00c8a00086261fcccce1b0d6325ee4",
+      "afterSha256": "e4bff978a41f6ecc0a385b9d58f8cb89c6dbffde36823724fd03bdbc81f56bc9"
+    },
+    "lib/types/continuation.d.ts": {
+      "beforeSha256": "7e728978c3636d6b97905f8bacb02079c5bd75f4e2c4566592d144f0371bd3fb",
+      "afterSha256": "03db15e2e90c1f88b2b1b56d076a06f350ce5f935ad6b9f54716337923744e0b"
+    },
+    "lib/types/continuation-activation.d.ts": {
+      "beforeSha256": "1d20569cdbea3012834a9f2637e9cdb28a687f3b7cd3cb1138f0850ffeb3d6bc",
+      "afterSha256": "3bcef48906878fa63628c67e813cbf31023f52a90f9b8ec5434ef9f28fda7791"
+    }
+  }
+}

@@ -28,6 +28,9 @@ import {
 import type { CommandPlan, LlmLike, Pin, Scope } from './pin.ts';
 import type { Context, Volatile } from '@deepseek-ai/cordis';
 import { installTeamModelSync } from './selection-sync.ts';
+import { resolvePresetPolicy } from './preset-policy.ts';
+import { installPresetCommand } from './preset-command.ts';
+import { installTeamPresetRuntime } from './preset-runtime.ts';
 
 /**
  * settings 命名空间 = Loader 入口 id（SPEC 5.4 的 rc.1 形态）。
@@ -187,6 +190,9 @@ export interface PluginConfig {
   defaults: Volatile<PinConfig | undefined>;
   sessions: Volatile<Record<string, PinConfig> | undefined>;
   auditPath: string;
+  /** Preset policy applies only when creating teammates, independently of model scope. */
+  presetDefault: Volatile<string | null | undefined>;
+  presetSessions: Volatile<Record<string, string | null> | undefined>;
 }
 
 /**
@@ -223,6 +229,8 @@ export const Config = z.object({
   defaults: pinSchema().volatile(),
   sessions: z.dict(pinSchema()).volatile(),
   auditPath: z.string(),
+  presetDefault: z.union([z.string(), z.const(null)]).volatile(),
+  presetSessions: z.dict(z.union([z.string(), z.const(null)])).volatile(),
 });
 
 /** `isVolatile` from @deepseek-ai/cosmokit: a globally keyed reference protocol. */
@@ -652,6 +660,11 @@ export function apply(ctx: PluginCtx, config: unknown): void {
       },
     }),
   );
+
+  // Independent paths: model/effort writes and clear never erase the preset choice.
+  const readPreset = (leadId: string) => resolvePresetPolicy(configValue(raw.presetDefault), configValue(raw.presetSessions), leadId);
+  installPresetCommand(ctx, entryId);
+  installTeamPresetRuntime(ctx as unknown as Context, readPreset);
 
   /* ---------- 5. Scoped prompt/request selection and legacy compatibility ---------- */
 
