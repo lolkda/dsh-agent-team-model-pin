@@ -1,6 +1,8 @@
 /** Web half: contribute data/actions to DSH's native slash-command popups. */
 import { applyTeamPin } from './pin.ts';
 import { installPresetCommand } from './preset-client.ts';
+import { TEAM_SETTINGS_REMOTE } from './team-settings-remote.ts';
+import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol';
 import type { Pin } from './pin.ts';
 import { CLIENT_VERSION, SETTINGS_NS, choiceId, effortPin, findModel, modelPin, readTeamPin, teamSessionKey, writeTeamPin } from './ui-state.ts';
 import type { ProviderGroup, Selection, SessionsLike, SettingsRemote } from './ui-state.ts';
@@ -40,17 +42,17 @@ interface Directory {
 interface ClientContext {
   commandUi: {
     register(command: CommandRegistration): () => void;
-    decorate(command: CommandRegistration): () => void;
     dismiss(name: string): void;
   };
+  inputTriggers: { registerSource(source: { trigger: '/'; name: string; showGroupTitle: false; candidates(): Promise<never[]>; onPick(): undefined; matchEnter(session: SessionContext, line: string, signal: AbortSignal): Promise<undefined> }): () => void };
   modelDirectories: { directoryFor(sessionId: string): Directory };
   sessions: SessionsLike;
-  remote: SettingsRemote;
+  remote: SettingsRemote & { $mount(contribution: TypertRemoteContribution): Promise<() => Promise<void>> };
   locale: {
     register(ns: string, dictionaries: Record<string, Record<string, string>>): () => void;
     bind(ns: string): (key: string) => string;
   };
-  effect(effect: () => (() => void)): unknown;
+  effect(effect: () => unknown): unknown;
 }
 interface Opening {
   sessionId: string;
@@ -75,6 +77,7 @@ const zh = {
   readOnly: '当前设置只读', missing: 'Team 插件尚未就绪，请刷新页面后重试',
   unavailable: '无法确定当前模型，请先选择主模型',
   reopen: '模型或会话状态已变化，请重新打开选择菜单',
+  menuOnly: '请只输入 /team-model、/team-effort 或 /team-preset，从选择面板操作，不需要填写参数。',
 };
 const en: typeof zh = {
   model: 'Team model', effort: 'Team reasoning effort',
@@ -85,22 +88,34 @@ const en: typeof zh = {
   readOnly: 'Settings are read-only', missing: 'The Team plugin is not ready. Refresh the page and retry.',
   unavailable: 'The current model is unavailable. Select a main model first.',
   reopen: 'The model or session has changed. Reopen the selection menu.',
+  menuOnly: 'Use /team-model, /team-effort or /team-preset without arguments and choose from the popup.',
 };
 
 export const name = `agent-team-model-pin-ui-${CLIENT_VERSION}`;
 // Native directory creation and settings each need their qualified RPC service.
-export const inject = ['commandUi', 'locale', 'modelDirectories', 'sessions', 'remote', 'remote.session', 'remote.settings'];
+export const inject = ['commandUi', 'inputTriggers', 'locale', 'modelDirectories', 'sessions', 'remote', 'remote.session', 'remote.settings'];
 
 /** Register native popup policies without installing a component or stylesheet. */
 export function apply(ctx: ClientContext): void {
+  ctx.effect(async function* () { yield await ctx.remote.$mount(TEAM_SETTINGS_REMOTE); });
   installPresetCommand(ctx);
   ctx.effect(() => ctx.locale.register('agentTeamModelPin', { zh, en }));
   const t = ctx.locale.bind('agentTeamModelPin');
   const commands = ctx.commandUi;
+  // Refuse retired argument syntax rather than accidentally sending a settings
+  // command to the conversation model. This public source contributes no rows.
+  ctx.effect(() => ctx.inputTriggers.registerSource({
+    trigger: '/', name: 'team-settings-input-guard', showGroupTitle: false,
+    candidates: async () => [], onPick: () => undefined,
+    async matchEnter(_session, line, signal) {
+      signal.throwIfAborted();
+      if (/^\/(?:team-model|team-effort|team-preset)\s+\S/.test(line.trim())) throw new Error(t('menuOnly'));
+      return undefined;
+    },
+  }));
   const offered = new WeakMap<SelectOption, OfferedChoice>();
   let live = true;
   const available = ({ sessionId }: SessionContext): boolean => ctx.sessions.binding(sessionId) !== undefined;
-  const isChild = ({ sessionId }: SessionContext): boolean => teamSessionKey(sessionId, ctx.sessions) !== sessionId;
 
   const makeSpec = (kind: 'model' | 'effort'): PopupSpec => ({
     kind: 'popupSelect',
@@ -171,11 +186,7 @@ export function apply(ctx: ClientContext): void {
   });
 
   const model = makeSpec('model');
-  // Bare invocation is a decoration: argued Host commands keep their claim path.
-  ctx.effect(() => commands.decorate({ name: 'team-model', available, ui: model }));
-  // Addressed children have no Host command catalog. Only there contribute a
-  // row of our own; root sessions never collide with the Host team-model row.
-  ctx.effect(() => commands.register({ name: 'team-model', available: session => available(session) && isChild(session),
+  ctx.effect(() => commands.register({ name: 'team-model', available,
     label: () => t('model'), description: () => t('modelDescription'), ui: model }));
   ctx.effect(() => commands.register({ name: 'team-effort', available,
     label: () => t('effort'), description: () => t('effortDescription'), ui: makeSpec('effort') }));

@@ -1,6 +1,6 @@
 {
   "name": "@lolkda/dsh-agent-team-model-pin",
-  "version": "1.5.0-rc.3",
+  "version": "1.5.0-rc.4",
   "description": "DSH Host/Web plugin: choose Team models, reasoning effort and creation-time Agent presets with native command menus",
   "keywords": [
     "dsh",
@@ -55,10 +55,14 @@
     "@deepseek-ai/schemastery": "3.18.4"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-agent": "*"
+    "@deepseek-ai/dsh-agent": "*",
+    "@deepseek-ai/dsh-typert-protocol": "*"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-typert-protocol": {
       "optional": true
     }
   },
@@ -68,6 +72,7 @@
     "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
     "@deepseek-ai/dsh-agent-loop": "0.2.0-rc.2",
     "@deepseek-ai/dsh-agent-preset-registry": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-api-gateway": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-store": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
@@ -87,6 +92,7 @@
     "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@deepseek-ai/dsh-typert-protocol": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-typert-registry": "0.2.0-rc.2",
     "@deepseek-ai/dsh-util-values": "0.2.0-rc.2",
     "@types/node": "^26.6.2",
     "@types/react": "^18.3.1",
@@ -127,7 +133,8 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-api-session-controller",
-        "@deepseek-ai/dsh-api-settings-controller"
+        "@deepseek-ai/dsh-api-settings-controller",
+        "@deepseek-ai/dsh-client-ui-input-trigger"
       ]
     }
   }

@@ -41,17 +41,13 @@ function harness(options = {}) {
         assert.fail('Client must not bypass the Host capability gate with settings.mutate');
       },
     },
-    commands: {
-      async execute(agentId, line, attachments, signal) {
-        state.executed.push({ agentId, line, attachments, signal });
-        if (state.execute) return state.execute(agentId, line, attachments, signal);
-        const error = text => ({ ok: true, value: { result: { kind: 'error', text } } });
+    teamSettings: {
+      async preset(agentId, revision, choice, signal) {
+        state.executed.push({ agentId, revision, choice, signal });
+        if (state.execute) return state.execute(agentId, revision, choice, signal);
+        const error = text => ({ ok: true, value: { kind: 'error', text } });
         if (!state.supported) return error('unsupported Team preset runtime');
         if (!state.writable) return error('settings/read-only');
-        const match = /^\/team-preset apply (\d+) ([\s\S]+)$/.exec(line);
-        assert.ok(match, 'Host apply grammar must carry revision and JSON choice');
-        const revision = Number(match[1]);
-        const choice = JSON.parse(match[2]);
         assert.ok(typeof choice === 'string' || choice === null);
         if (revision !== state.view.revision) return error('settings/conflict');
         const namespace = ns;
@@ -59,12 +55,12 @@ function harness(options = {}) {
         state.calls.push({ namespace, ops, revision });
         if (state.mutate) {
           const result = await state.mutate(namespace, ops, revision);
-          return result.ok ? { ok: true, value: { result: { kind: 'success' } } } : error(result.error.message);
+          return result.ok ? { ok: true, value: { kind: 'success' } } : error(result.error.message);
         }
         state.view.value.presetSessions ??= {};
         state.view.value.presetSessions[agentId] = choice;
         state.view.revision++;
-        return { ok: true, value: { result: { kind: 'success', text: 'Saved for future teammates' } } };
+        return { ok: true, value: { kind: 'success', text: 'Saved for future teammates' } };
       },
     },
     agentPresets: {
@@ -76,7 +72,7 @@ function harness(options = {}) {
     },
   };
   if (options.absentCatalog) delete remote.agentPresets;
-  if (options.absentCommands) delete remote.commands;
+  if (options.absentCommands) delete remote.teamSettings;
   const ctx = {
     commandUi: {
       decorate(row) { state.decorations.set(row.name, row); return () => state.decorations.delete(row.name); },
@@ -93,7 +89,7 @@ function harness(options = {}) {
   };
   const install = () => installPresetCommand(ctx);
   if (options.install !== false) install();
-  const ui = () => state.decorations.get('team-preset').ui;
+  const ui = () => state.registrations.get('team-preset').ui;
   const open = async (id = 'lead-A', controller = new AbortController()) => {
     const spec = ui();
     const rows = await spec.options(session(id), controller.signal);
@@ -103,13 +99,13 @@ function harness(options = {}) {
     unload: () => { for (const dispose of state.effects.splice(0).reverse()) dispose(); } };
 }
 
-test('preset popup is native, decorates root host command and contributes only for children', () => {
+test('preset popup is one localized client contribution for both root and child sessions', () => {
   const h = harness();
-  const root = h.state.decorations.get('team-preset');
+  const root = h.state.registrations.get('team-preset');
   const child = h.state.registrations.get('team-preset');
   assert.equal(root.available(session()), true);
-  assert.equal(root.available(session('mate-A')), false);
-  assert.equal(child.available(session()), false);
+  assert.equal(root.available(session('mate-A')), true);
+  assert.equal(child.available(session()), true);
   assert.equal(child.available(session('mate-A')), true);
   assert.equal(child.available(session('absent')), false);
   assert.equal(root.ui, child.ui);
@@ -128,7 +124,7 @@ test('preset popup lists follow and usable presets, never a broken preset', asyn
   assert.match(popup.rows[2].detail, /reviewer.*Review tools.*new teammates/);
   h.state.language = 'zh';
   assert.match(h.ui().searchLabels().placeholder, /预设/);
-  assert.match(h.state.decorations.get('team-preset').description(), /现有队友不变/);
+  assert.match(h.state.registrations.get('team-preset').description(), /现有队友不变/);
 });
 
 for (const [label, view, selected] of [
@@ -159,7 +155,7 @@ test('saving addresses only the opening Lead preset path, preserves model and ot
   assert.deepEqual(h.state.view.value, { sessions: { 'lead-A': { model: 'fixed' } }, presetDefault: 'standard',
     presetSessions: { 'lead-B': 'standard', 'lead-A': 'reviewer' } });
   assert.equal(h.state.lists, 2, 'catalog revalidated before write');
-  assert.deepEqual(h.state.executed, [{ agentId: 'lead-A', line: '/team-preset apply 4 \"reviewer\"', attachments: [], signal: popup.controller.signal }]);
+  assert.deepEqual(h.state.executed, [{ agentId: 'lead-A', revision: 4, choice: 'reviewer', signal: popup.controller.signal }]);
   assert.equal(h.state.directWrites, 0);
 });
 
@@ -173,7 +169,7 @@ test('follow explicitly writes null so a configured baseline does not become act
 
 test('missing catalog does not fail installation and gives clear error only when opening preset menu', async () => {
   const h = harness({ absentCatalog: true });
-  assert.equal(h.state.decorations.size, 1);
+  assert.equal(h.state.decorations.size, 0);
   await assert.rejects(h.open(), /catalog is unavailable/);
   assert.equal(h.state.calls.length, 0);
 });
@@ -192,13 +188,13 @@ test('optional Cordis namespace is resolved through the injected child, not unde
     constructor(ctx) { super(ctx, 'remote'); }
     get settings() { return this.ctx['remote.settings']; }
     get agentPresets() { return this.ctx['remote.agentPresets']; }
-    get commands() { return this.ctx['remote.commands']; }
+    get teamSettings() { return this.ctx['remote.teamSettings']; }
   }
   // Real DSH Remote namespaces are Cordis Services, not plain objects. Every
   // context read creates a fresh caller-traced Proxy around the same service.
   class CommandsNamespace extends Service {
-    constructor(ctx) { super(ctx, 'remote.commands'); }
-    execute(...args) { return h.ctx.remote.commands.execute(...args); }
+    constructor(ctx) { super(ctx, 'remote.teamSettings'); }
+    preset(...args) { return h.ctx.remote.teamSettings.preset(...args); }
   }
   class CatalogNamespace extends Service {
     constructor(ctx) { super(ctx, 'remote.agentPresets'); }
@@ -221,7 +217,7 @@ test('optional Cordis namespace is resolved through the injected child, not unde
   await catalog.await();
   await new Promise(resolve => setImmediate(resolve));
   assert.notEqual(root.get('remote.agentPresets'), root.get('remote.agentPresets'), 'the SDK retraces each read');
-  assert.notEqual(root.get('remote.commands'), root.get('remote.commands'), 'commands use the same tracing protocol');
+  assert.notEqual(root.get('remote.teamSettings'), root.get('remote.teamSettings'), 'commands use the same tracing protocol');
   const popup = await h.open();
   assert.equal(popup.rows.length, 3);
   await popup.choose('reviewer');
@@ -280,7 +276,7 @@ test('CAS uses opening revision and propagates conflict without overwriting sett
   h.state.view.revision++;
   h.state.view.value.presetSessions = { 'lead-A': 'standard' };
   await assert.rejects(popup.choose('reviewer'), /settings\/conflict/);
-  assert.equal(h.state.executed[0].line, '/team-preset apply 4 \"reviewer\"');
+  assert.equal(h.state.executed[0].choice, 'reviewer');
   assert.equal(h.state.calls.length, 0);
   assert.equal(h.state.directWrites, 0);
   assert.equal(h.state.view.value.presetSessions['lead-A'], 'standard');
@@ -384,15 +380,15 @@ test('unsupported Host capability is surfaced as failure with zero direct or Hos
 
 test('missing command namespace is optional at installation but saving has no settings fallback', async () => {
   const h = harness({ absentCommands: true });
-  await assert.rejects(h.open(), /command is unavailable/);
+  await assert.rejects(h.open(), /saving API is unavailable/);
   assert.equal(h.state.calls.length, 0);
   assert.equal(h.state.directWrites, 0);
 });
 
 for (const [label, response, pattern] of [
-  ['command removed', { ok: true, value: undefined }, /command is unavailable/],
+  ['command removed', { ok: true, value: undefined }, /saving API is unavailable/],
   ['command RPC rejected', { ok: false, error: { message: 'gateway unavailable' } }, /gateway unavailable/],
-  ['Host handler rejected', { ok: true, value: { result: { kind: 'error', text: 'Host rejected preset' } } }, /Host rejected preset/],
+  ['Host handler rejected', { ok: true, value: { kind: 'error', text: 'Host rejected preset' } }, /Host rejected preset/],
 ]) test(`${label} cannot masquerade as a successful preset save`, async () => {
   const h = harness();
   const popup = await h.open();
@@ -408,7 +404,7 @@ test('preset IDs are JSON-escaped in Host command payload, not interpolated as a
   h.state.rows.push({ id, name: 'Custom preset' });
   const popup = await h.open();
   await popup.choose(id);
-  assert.equal(h.state.executed[0].line, `/team-preset apply 4 ${JSON.stringify(id)}`);
+  assert.equal(h.state.executed[0].choice, id);
   assert.equal(h.state.view.value.presetSessions['lead-A'], id);
   assert.equal(h.state.directWrites, 0);
 });
@@ -428,7 +424,7 @@ test('built-in preset names/descriptions are localized, with IDs retained and sa
   assert.match(popup.rows[4].detail, /用对话定制 DSH/);
   await popup.choose('cordis');
   assert.equal(h.state.view.value.presetSessions['lead-A'], 'cordis');
-  assert.equal(h.state.executed[0].line, '/team-preset apply 4 "cordis"');
+  assert.equal(h.state.executed[0].choice, 'cordis');
   assert.deepEqual(h.state.rows, before, 'display folding must not mutate catalog metadata');
   h.state.language = 'en';
   popup = await h.open();

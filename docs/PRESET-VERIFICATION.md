@@ -60,3 +60,12 @@ npm pack --ignore-scripts --pack-destination artifacts/preset-1.5.0-rc.1
 - 内置预设名和说明按界面语言展示，英文 ID 留在详情；自定义名字/说明原样保留，包括自定义 preset 使用内置同名 ID 的情况。
 - 单元验证中文/英文切换、原生文案优先级、词典缺失、元数据不变以及原始 ID 保存；真实原生面板验证中文搜索、键盘选择和 RPC payload。
 - `npm run check`：**252 项测试通过，0 失败、0 跳过**；`npm run smoke:dist` 通过。
+
+
+## 1.5.0-rc.4：纯插件方式统一命令标题
+
+- 根/子会话、中/英文各菜单恰好包含一条 Team model/effort/preset，且均有正确的本地化标题。
+- 真实 TypertRegistry + Host Gateway + Client Remote `$mount` 验证插件私有 RPC 的参数映射、Agent lookup、未知参数拒绝、取消以及卸载。
+- 真实 DSH 新进程启动/恢复测试改经实际 Gateway 调用 `teamSettings.model`，确认 Host 没有冲突的同名 slash 项，配置与模型请求继续正确。
+- 测试保留不可用预设、缺失宿主扩展、CAS、只读和生命周期保护；新增旧参数语法不落入模型的检查。
+- `npm run check`：**255 项测试通过，0 失败、0 跳过**。没有修改 DSH 的官方文件。

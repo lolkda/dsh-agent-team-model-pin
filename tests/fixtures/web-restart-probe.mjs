@@ -66,7 +66,7 @@ try {
   // DSH 0.1.7-rc.1 renamed the preset registry package (`dsh-agent-presets` →
   // `dsh-agent-preset-registry`); the rest of the deployment-owned core set is
   // unchanged.
-  for (const name of ['dsh-agent', 'dsh-scope', 'dsh-system-prompt', 'dsh-agent-preset-registry', 'dsh-agent-loop']) {
+  for (const name of ['dsh-agent', 'dsh-scope', 'dsh-system-prompt', 'dsh-agent-preset-registry', 'dsh-agent-loop', 'dsh-typert-protocol']) {
     const packageId = `@deepseek-ai/${name}`;
     const resolved = ctx.get('pluginPackages').packageOf(packageId, pathToFileURL(join(profileDir, 'package.json')).href);
     const expected = await realpath(dirname(installRequire.resolve(`${packageId}/package.json`)));
@@ -121,12 +121,13 @@ try {
   let restoredMessages = 0;
   if (phase === 'create') {
     await converse(primary, 'main-model', 'high');
-    // Drive the real slash command, not `settings.mutate` directly: this proves
-    // the whole rc.1 chain in a deployed process — command handler →
-    // ctx.settings.mutate(entryId, ops) → profile patch → volatile commit.
-    const executed = await ctx.get('commands').execute(primary, `/team-model ${provider} team-pinned`, [], AbortSignal.timeout(5000));
-    assert.ok(executed, 'the installed /team-model command must resolve');
-    assert.equal(executed.result.kind, 'success', JSON.stringify(executed.result));
+    // Exercise the plugin-owned RPC through the real Gateway and Agent lookup.
+    // No Host slash row should collide with the localized client contribution.
+    assert.equal(ctx.get('commands').find(primary, 'team-model'), undefined);
+    assert.equal(ctx.get('commands').find(primary, 'team-preset'), undefined);
+    const executed = await ctx.get('typertGateway').invoke({ namespace: 'teamSettings', method: 'model',
+      args: { agentId: primary.id, rawInput: `${provider} team-pinned` }, signal: AbortSignal.timeout(5000) });
+    assert.equal(executed.kind, 'success', JSON.stringify(executed));
     const committed = entry.fiber.config.sessions.get()[primaryId];
     assert.equal(committed?.model, 'team-pinned', 'the command must commit the pin into the live entry config');
   } else {

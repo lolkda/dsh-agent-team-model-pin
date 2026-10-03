@@ -4,6 +4,23 @@ DSH Agent Team 模型选择插件。**1.4.0 起通过原生 `/team-model` 和 `/
 
 源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。
 
+## 1.5.0-rc.4：三个 Team 菜单统一中文标题（纯插件修改）
+
+三个入口都使用 DSH 现有的客户端命令注册接口，中文界面显示：
+
+| 菜单标题 | 命令名 |
+|---|---|
+| Team 模型 | `team-model` |
+| Team 推理等级 | `team-effort` |
+| Team 预设 | `team-preset` |
+
+- 根会话、子会话均只有一条对应菜单项，名称跟随界面语言。没有给 `decorate()` 塞无效字段，也没有修改 DSH 原生命令 UI、替换原生组件或注入 DOM/CSS。
+- 后端不再把 `team-model`、`team-preset` 注册为菜单命令，避免与客户端重名。预设保存改走本插件的 `teamSettings.preset` RPC；能力检查、目录校验、Lead 会话键、CAS 和取消检查仍在后端。
+- RPC 使用 DSH 公开的 Typert 注册/绑定接口，SDK 由宿主提供，不在 Profile 安装另一份核心运行时。模型原有业务操作也保留为独立 RPC，不向用户增加技术菜单项。
+- **用户只使用三个裸命令打开选择面板。** 旧的文字参数操作不再作为用户命令入口；Web 会明确提示使用面板，而不是把旧设置命令送给模型。原来的配置字段和已保存选择保持不变。
+- 这次名称统一**不需要 DSH 补丁**。此前预设在创建时真正应用所需的子 Agent 扩展是另一件事，本次没有改变或绕过该要求。
+- 升级后请重启 DSH 并刷新页面，保证 Host RPC 和客户端菜单来自同一版本。
+
 ## 1.5.0-rc.3：内置预设名称与原生界面一致
 
 - `/team-preset` 复用 DSH 的 `presetDisplayText()`：中文界面显示「标准模式 / PTC 模式 / 极简模式 / 创造模式」，详情保留实际英文 ID。
@@ -56,7 +73,7 @@ DSH Agent Team 模型选择插件。**1.4.0 起通过原生 `/team-model` 和 `/
 - 保持 Loader entry id 为 `agent-team-model-pin`；Client 用此 id 寻址配置，手动改名不在本版支持范围。
 - 以下旧版本章节是历史修复记录；本版运行时与配置接口以本节和更新后的 SPEC 为准。
 
-## 1.4.0：原生命令选择面板
+## 1.4.0：原生命令选择面板（历史行为）
 
 在输入框输入以下命令，或从 `/` 命令列表选中它。**不需要手动输入 provider/model 参数**：
 
@@ -158,7 +175,9 @@ plugin_manager action=remove_bundle target=@lolkda/dsh-agent-team-model-pin
 
 以上是历史 1.2.3 的四项菜单验收。1.4.0 安装后应改为检查 `/team-model`、`/team-effort` 原生面板能打开并保存，且主模型控件仍由 DSH 原生插件提供。只看到 bundle enabled 不算界面验收；若管理器返回 restart-required，应重启 DSH 再刷新浏览器，不把刷新浏览器当作 Host 重启。
 
-## 命令仍然保留
+## 历史文字命令（截至 1.5.0-rc.3）
+
+**以下仅供历史迁移参考；rc.4 起请使用裸命令选择面板，不再输入参数。**
 
 ```text
 /team-model

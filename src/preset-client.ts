@@ -35,19 +35,18 @@ interface PresetRow {
 interface PresetCatalogRemote {
   list(): Promise<Result<{ presets: readonly PresetRow[] }>>;
 }
-interface PresetCommandRemote {
-  execute(agentId: string, line: string, submittedAttachments: readonly never[], signal?: AbortSignal):
-    Promise<Result<{ result: { kind: 'success' | 'error'; text?: string } } | undefined>>;
+interface PresetSaveRemote {
+  preset(agentId: string, revision: number, choice: string | null, signal?: AbortSignal):
+    Promise<Result<{ kind: 'success' | 'error'; text?: string }>>;
 }
 interface CatalogContext {
-  remote: { agentPresets?: PresetCatalogRemote; commands?: PresetCommandRemote };
-  effect(effect: () => (() => void)): unknown;
+  remote: { agentPresets?: PresetCatalogRemote; teamSettings?: PresetSaveRemote };
+  effect(effect: () => unknown): unknown;
 }
-/** Settings are read-only here; the Host command owns validation and persistence. */
+/** Settings are read-only here; the Host RPC owns validation and persistence. */
 export interface PresetClientContext {
   commandUi: {
     register(command: CommandRegistration): () => void;
-    decorate(command: CommandRegistration): () => void;
     dismiss(name: string): void;
   };
   sessions: SessionsLike;
@@ -56,13 +55,13 @@ export interface PresetClientContext {
       describe(): Promise<Result<{ writable: boolean; namespaces: NamespaceView[] }>>;
     };
     agentPresets?: PresetCatalogRemote;
-    commands?: PresetCommandRemote;
+    teamSettings?: PresetSaveRemote;
   };
   locale: {
     register(ns: string, dictionaries: Record<string, Record<string, string>>): () => void;
     bind(ns: string): (key: string) => string;
   };
-  effect(effect: () => (() => void)): unknown;
+  effect(effect: () => unknown): unknown;
   /** Cordis grants the qualified Remote dependency only inside this child. */
   inject?(dependencies: string[], callback: (child: CatalogContext) => void): unknown;
 }
@@ -74,7 +73,7 @@ interface Opening {
   signal: AbortSignal;
   generation: number;
   catalog: PresetCatalogRemote;
-  commands: PresetCommandRemote;
+  saver: PresetSaveRemote;
   saving: boolean;
   committed: boolean;
 }
@@ -91,7 +90,7 @@ const zh = {
   presetMinimalDescription: 'Agent 仅使用终端工具完成任务，适合测试和对比其基础表现。',
   presetCordisName: '创造模式',
   presetCordisDescription: '用对话定制 DSH：让 Agent 编写插件，添加新功能或界面；也能组合工具和提示词，创建自己的模式。',
-  preset: 'Team 预设（新队友）',
+  preset: 'Team 预设',
   description: '选择之后新建队友使用的 Agent 预设；现有队友不变',
   futureOnly: '仅对之后新建的队友生效，现有队友保持原预设',
   follow: '跟随主 Agent',
@@ -100,7 +99,7 @@ const zh = {
   readOnly: '当前设置只读', missing: 'Team 插件尚未就绪，请刷新页面后重试',
   catalogUnavailable: 'Agent 预设目录不可用，请确认预设服务已启用后重试',
   invalidCatalog: 'Agent 预设目录返回了无效数据，请刷新后重试',
-  commandUnavailable: 'Team 预设保存命令不可用，请确认 Host 插件已升级后重试',
+  saveUnavailable: 'Team 预设保存接口不可用，请确认 Host 插件已升级并重启后重试',
   saveFailed: 'Team 预设保存失败，请重新打开选择菜单',
   unavailable: '该 Agent 预设已移除或无法加载，请重新打开选择菜单',
   reopen: '会话或菜单状态已变化，请重新打开选择菜单',
@@ -115,7 +114,7 @@ const en: typeof zh = {
   presetMinimalDescription: 'The agent works using only a terminal tool. Useful for testing and comparing its basic performance.',
   presetCordisName: 'Creator mode',
   presetCordisDescription: 'Customize DSH through conversation. Let the agent write plugins that add features or UI, or combine tools and prompts to create your own mode.',
-  preset: 'Team preset (new teammates)',
+  preset: 'Team preset',
   description: 'Choose the Agent preset for future teammates; existing teammates stay unchanged',
   futureOnly: 'Applies only to new teammates; existing teammates keep their preset',
   follow: 'Follow main Agent',
@@ -124,7 +123,7 @@ const en: typeof zh = {
   readOnly: 'Settings are read-only', missing: 'The Team plugin is not ready. Refresh the page and retry.',
   catalogUnavailable: 'The Agent preset catalog is unavailable. Enable the preset service and retry.',
   invalidCatalog: 'The Agent preset catalog returned invalid data. Refresh and retry.',
-  commandUnavailable: 'The Team preset command is unavailable. Upgrade the Host plugin and retry.',
+  saveUnavailable: 'The Team preset saving API is unavailable. Upgrade and restart the Host plugin, then retry.',
   saveFailed: 'Could not save the Team preset. Reopen the selection menu.',
   unavailable: 'The Agent preset was removed or cannot be loaded. Reopen the selection menu.',
   reopen: 'The session or menu changed. Reopen the selection menu.',
@@ -165,7 +164,7 @@ export function installPresetCommand(ctx: PresetClientContext): void {
   let live = true;
   let generation = 0;
   let catalogSource: (() => PresetCatalogRemote | undefined) | undefined;
-  let commandSource: (() => PresetCommandRemote | undefined) | undefined;
+  let saveSource: (() => PresetSaveRemote | undefined) | undefined;
 
   if (ctx.inject) {
     ctx.inject(['remote.agentPresets'], child => {
@@ -177,16 +176,16 @@ export function installPresetCommand(ctx: PresetClientContext): void {
       catalogSource = source;
       child.effect(() => () => { if (catalogSource === source) catalogSource = undefined; });
     });
-    ctx.inject(['remote.commands'], child => {
-      const remote = child.remote.commands;
+    ctx.inject(['remote.teamSettings'], child => {
+      const remote = child.remote.teamSettings;
       const source = () => remote;
-      commandSource = source;
-      child.effect(() => () => { if (commandSource === source) commandSource = undefined; });
+      saveSource = source;
+      child.effect(() => () => { if (saveSource === source) saveSource = undefined; });
     });
   } else {
     // Standalone consumers without Cordis may supply the same structural API.
     catalogSource = () => ctx.remote.agentPresets;
-    commandSource = () => ctx.remote.commands;
+    saveSource = () => ctx.remote.teamSettings;
   }
   const catalogRemote = (): PresetCatalogRemote | undefined => {
     // A guarded Remote getter can throw when an old Host lacks the namespace.
@@ -195,19 +194,18 @@ export function installPresetCommand(ctx: PresetClientContext): void {
       return remote && typeof remote.list === 'function' ? remote : undefined;
     } catch { return undefined; }
   };
-  const commandRemote = (): PresetCommandRemote | undefined => {
+  const saveRemote = (): PresetSaveRemote | undefined => {
     try {
-      const remote = commandSource?.();
-      return remote && typeof remote.execute === 'function' ? remote : undefined;
+      const remote = saveSource?.();
+      return remote && typeof remote.preset === 'function' ? remote : undefined;
     } catch { return undefined; }
   };
   const available = ({ sessionId }: SessionContext): boolean => live && ctx.sessions.binding(sessionId) !== undefined;
-  const isChild = ({ sessionId }: SessionContext): boolean => teamSessionKey(sessionId, ctx.sessions) !== sessionId;
   const assertOpening = (opening: Opening, sessionId = opening.sessionId): void => {
     opening.signal.throwIfAborted();
     if (!live || sessionId !== opening.sessionId || opening.generation !== generation || opening.committed
       || ctx.sessions.binding(sessionId) !== opening.binding || teamSessionKey(sessionId, ctx.sessions) !== opening.key
-      || catalogRemote() !== opening.catalog || commandRemote() !== opening.commands) throw new Error(t('reopen'));
+      || catalogRemote() !== opening.catalog || saveRemote() !== opening.saver) throw new Error(t('reopen'));
   };
   const catalog = async (remote: PresetCatalogRemote): Promise<readonly PresetRow[]> => {
     const result = await remote.list();
@@ -229,10 +227,10 @@ export function installPresetCommand(ctx: PresetClientContext): void {
       if (!live || !binding) throw new Error(t('reopen'));
       const remote = catalogRemote();
       if (!remote) throw new Error(t('catalogUnavailable'));
-      const command = commandRemote();
-      if (!command) throw new Error(t('commandUnavailable'));
+      const command = saveRemote();
+      if (!command) throw new Error(t('saveUnavailable'));
       const opening: Opening = { sessionId, key: teamSessionKey(sessionId, ctx.sessions), binding, signal,
-        generation: ++generation, revision: -1, catalog: remote, commands: command, saving: false, committed: false };
+        generation: ++generation, revision: -1, catalog: remote, saver: command, saving: false, committed: false };
       const settings = await ctx.remote.settings.describe();
       assertOpening(opening);
       if (!settings.ok) throw new Error(settings.error.message);
@@ -267,13 +265,13 @@ export function installPresetCommand(ctx: PresetClientContext): void {
         const rows = await catalog(opening.catalog);
         assertOpening(opening, sessionId);
         if (preset !== null && !rows.some(row => row.id === preset)) throw new Error(t('unavailable'));
-        // Never bypass the Host's runtime-capability gate with settings.mutate.
-        // The apply grammar carries the same CAS token and JSON-escaped choice.
-        const result = await opening.commands.execute(opening.key,
-          `/team-preset apply ${opening.revision} ${JSON.stringify(preset)}`, [], opening.signal);
+        // Never bypass the Host RPC's runtime-capability gate with settings.mutate.
+        // The plugin-owned RPC carries the opening CAS token and raw preset ID.
+        const result = await opening.saver.preset(opening.key,
+          opening.revision, preset, opening.signal);
         if (!result.ok) throw new Error(result.error.message);
-        if (!result.value?.result) throw new Error(t('commandUnavailable'));
-        if (result.value.result.kind !== 'success') throw new Error(result.value.result.text || t('saveFailed'));
+        if (!result.value) throw new Error(t('saveUnavailable'));
+        if (result.value.kind !== 'success') throw new Error(result.value.text || t('saveFailed'));
         // Closing after submission cannot undo the write, but must not report
         // a late success to a new/replaced popup or consume its input token.
         assertOpening(opening, sessionId);
@@ -281,9 +279,7 @@ export function installPresetCommand(ctx: PresetClientContext): void {
       } finally { opening.saving = false; }
     },
   };
-  ctx.effect(() => commands.decorate({ name: 'team-preset', available: session => available(session) && !isChild(session),
-    label: () => t('preset'), description: () => t('description'), ui }));
-  ctx.effect(() => commands.register({ name: 'team-preset', available: session => available(session) && isChild(session),
+  ctx.effect(() => commands.register({ name: 'team-preset', available,
     label: () => t('preset'), description: () => t('description'), ui }));
   ctx.effect(() => () => { live = false; generation++; commands.dismiss('team-preset'); });
 }

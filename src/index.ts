@@ -29,7 +29,8 @@ import type { CommandPlan, LlmLike, Pin, Scope } from './pin.ts';
 import type { Context, Volatile } from '@deepseek-ai/cordis';
 import { installTeamModelSync } from './selection-sync.ts';
 import { resolvePresetPolicy } from './preset-policy.ts';
-import { installPresetCommand } from './preset-command.ts';
+import { createPresetCommand } from './preset-command.ts';
+import { installTeamSettingsRpc } from './team-settings-rpc.ts';
 import { installTeamPresetRuntime } from './preset-runtime.ts';
 
 /**
@@ -132,7 +133,7 @@ type RequestListener = (
 interface PluginCtx {
   logger: { warn(format: unknown, ...params: unknown[]): void };
   agentTeams: { tryMembership(agent: AgentLike): MembershipLike | undefined };
-  commands: { register(definition: CommandDefinitionLike): () => void };
+  provide(name: string, value: unknown): unknown;
   inject(deps: string[], callback: (child: { settings: SettingsLike }) => void): unknown;
   get(name: string): unknown;
   on(event: string, listener: RequestListener): () => void;
@@ -312,10 +313,10 @@ function resolveLayer(input: {
 
 export const name = 'agent-team-model-pin';
 
-export const inject = ['agentTeams', 'commands'];
+export const inject = ['agentTeams'];
 
 /**
- * 安装插件：归一化配置、安装 settings 段落、注册 `/team-model` 命令、
+ * 安装插件：归一化配置、安装 settings 段落、发布 Team 设置 RPC、
  * 安装 Agent 作用域的官方选择器；仅无作用域旧驱动使用全局兼容监听，命中时追加审计。
  * @param ctx 插件上下文（`agentTeams` 与 `commands` 已注入）。
  * @param config 组合配置（任意形态；非法值只告警不抛）。
@@ -533,7 +534,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
     });
   };
 
-  /* ---------- 4. 命令 /team-model ---------- */
+  /* ---------- 4. Model settings domain (invoked by plugin-owned RPC) ---------- */
 
   const describeLayers = (sessionId: string, role?: Role): string => {
     const effective = liveSessions();
@@ -553,8 +554,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
     ].join('\n');
   };
 
-  ctx.effect(() =>
-    ctx.commands.register({
+  const modelCommand: CommandDefinitionLike = {
       name: 'team-model',
       description: '查看 / 设置 / 清除本会话团队队友的模型钉（provider / model / reasoningEffort）',
       input: { hint: '<provider> <model> [effort] | show | clear' },
@@ -658,12 +658,11 @@ export function apply(ctx: PluginCtx, config: unknown): void {
               : `已清除本会话（${sessionId}）的运行期钉；但该作用键仍被组合配置钉住：${describePin(baseline)}（来自 Composition 层，需改组合配置才能解除）。`,
         };
       },
-    }),
-  );
+  };
 
   // Independent paths: model/effort writes and clear never erase the preset choice.
   const readPreset = (leadId: string) => resolvePresetPolicy(configValue(raw.presetDefault), configValue(raw.presetSessions), leadId);
-  installPresetCommand(ctx, entryId);
+  installTeamSettingsRpc(ctx, { model: modelCommand.handler, preset: createPresetCommand(ctx, entryId).handler });
   installTeamPresetRuntime(ctx as unknown as Context, readPreset);
 
   /* ---------- 5. Scoped prompt/request selection and legacy compatibility ---------- */

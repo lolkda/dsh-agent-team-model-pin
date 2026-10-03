@@ -73,6 +73,8 @@ class RemoteFacade extends Service {
   get settings() { return this.ctx['remote.settings']; }
   get commands() { return this.ctx['remote.commands']; }
   get agentPresets() { return this.ctx['remote.agentPresets']; }
+  get teamSettings() { return this.ctx['remote.teamSettings']; }
+  async $mount(contribution) { assert.equal(contribution.package, '@lolkda/dsh-agent-team-model-pin'); return async () => {}; }
 }
 
 export async function mount(t, options = {}) {
@@ -80,12 +82,13 @@ export async function mount(t, options = {}) {
   const root = new Context();
   const container = win.document.createElement('div');
   win.document.body.append(container);
-  const calls = { settings: [], main: [], executed: [], consumed: [], focused: 0, catalog: 0, presetCatalog: 0, presetWrites: [] };
+  const calls = { settings: [], main: [], executed: [], consumed: [], focused: 0, catalog: 0, presetCatalog: 0, presetWrites: [], presetCalls: [] };
   const errors = [], consoleErrors = [];
   consoleSink = consoleErrors;
   const bindings = new Map(), projections = new Map(), listeners = new Set();
   const parents = new Map(Object.entries(options.parents ?? {}));
   let currentBinding, slash, stopMount, candidateFiber;
+  const triggerSources = new Map();
   let language = 'zh', localeRevision = 0;
   const dictionaries = new Map(), localeListeners = new Set();
   const locale = {
@@ -110,7 +113,7 @@ export async function mount(t, options = {}) {
     { id: 'reviewer', name: 'Reviewer', description: 'Review tools', isDefault: false },
     { id: 'broken', name: 'Broken', broken: 'activation failed', isDefault: false },
   ];
-  const commandResult = (kind, text) => ({ ok: true, value: { result: { kind, text } } });
+  const commandResult = (kind, text) => ({ ok: true, value: { kind, text } });
   const applyPresetCommand = async (leadId, revision, choice, signal) => {
     if (options.presetSupported === false) return commandResult('error', 'Team preset runtime unsupported; install the pre-publication hook');
     if (options.readOnly) return commandResult('error', 'settings/read-only');
@@ -170,23 +173,13 @@ export async function mount(t, options = {}) {
     ctx.provide('locale', locale);
     ctx.provide('sessions', sessions);
     ctx.provide('conversation', { input: { for: () => ({ focus: () => { calls.focused++; } }) } });
-    ctx.provide('inputTriggers', { registerSource(value) { slash = value; return () => { slash = undefined; }; } });
+    ctx.provide('inputTriggers', { registerSource(value) { triggerSources.set(value.name, value); if (value.name === 'command') slash = value; return () => { triggerSources.delete(value.name); if (value.name === 'command') slash = undefined; }; } });
     provideRemote(ctx, 'commands', {
-      list: async () => ({ ok: true, value: [
-        { name: 'team-model', description: 'Team model', input: { hint: '<provider> <model> [effort]' } },
-        ...(options.teamPreset ? [{ name: 'team-preset', description: 'Team preset for new teammates' }] : []),
-      ] }),
-      execute: async (...args) => {
-        calls.executed.push(args);
-        const [leadId, line, attachments, signal] = args;
-        if (options.teamPreset && line.startsWith('/team-preset apply ')) {
-          assert.deepEqual(Array.from(attachments), []);
-          const match = /^\/team-preset apply (\d+) ([\s\S]+)$/.exec(line);
-          if (!match) return commandResult('error', 'invalid preset apply command');
-          return applyPresetCommand(leadId, Number(match[1]), JSON.parse(match[2]), signal);
-        }
-        return { ok: true, value: { result: { kind: 'success' } } };
-      },
+      list: async () => ({ ok: true, value: [{ name: 'host-example', description: 'Unrelated Host command', input: { hint: '<message>' } }] }),
+      execute: async (...args) => { calls.executed.push(args); return { ok: true, value: { result: { kind: 'success' } } }; },
+    });
+    if (options.teamPreset) provideRemote(ctx, 'teamSettings', {
+      async preset(...args) { calls.presetCalls.push(args); return applyPresetCommand(...args); },
     });
     if (options.teamPreset && !options.omitPresetCatalog) provideRemote(ctx, 'agentPresets', {
       async list() {
@@ -244,7 +237,12 @@ export async function mount(t, options = {}) {
   const popup = (id = currentBinding.key) => root.get('commandUi').popupFor(bindings.get(id).ctx);
   const enter = async (line, id = currentBinding.key, envelope = { attachments: 0 }) => {
     let result;
-    await act(async () => { result = await slash.matchEnter(session(id), line, AbortSignal.timeout(5000), envelope); });
+    await act(async () => {
+      for (const source of triggerSources.values()) {
+        result = await source.matchEnter?.(session(id), line, AbortSignal.timeout(5000), envelope);
+        if (result !== undefined) break;
+      }
+    });
     return result;
   };
   const click = async (element) => { assert.ok(element); await act(async () => { element.dispatchEvent(new win.MouseEvent('click', { bubbles: true })); }); };

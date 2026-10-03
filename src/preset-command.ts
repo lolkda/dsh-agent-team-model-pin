@@ -1,4 +1,4 @@
-/** Host /team-preset: future teammate composition policy, never a live switch. */
+/** Host preset-save domain for the plugin RPC; never registers a slash-menu row. */
 import { assertPresetSelectable, parsePresetSave } from './preset-policy.ts';
 import type { PresetCatalog } from './preset-policy.ts';
 import { PRESET_RUNTIME_REQUIRED, supportsTeamPresetRuntime } from './preset-capability.ts';
@@ -11,20 +11,16 @@ interface Settings {
 interface PresetCommandHost {
   get(name: string): unknown;
   agentTeams: { tryMembership(agent: MemberAgent): { root: MemberAgent; role: 'lead' | 'teammate' } | undefined };
-  commands: { register(definition: {
-    name: string; description: string;
-    handler(input: { agent: MemberAgent; rawInput: string; signal: AbortSignal }): Promise<{ kind: 'success' | 'error'; text: string }>;
-  }): () => void };
-  effect(effect: () => unknown): unknown;
+
 }
 const scopeNotice = '仅作用于之后新建的队友；Lead 和已存在队友不变。模型与思考等级设置不受影响。';
 const textOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
-export function installPresetCommand(host: PresetCommandHost, entryId: () => string): void {
-  host.effect(() => host.commands.register({
+export function createPresetCommand(host: PresetCommandHost, entryId: () => string) {
+  return {
     name: 'team-preset',
     description: '选择之后新建的 Team 队友使用的 Agent 预设（不热切换）',
-    async handler({ agent, rawInput, signal }) {
+    async handler({ agent, rawInput, signal }: { agent: MemberAgent; rawInput: string; signal: AbortSignal }): Promise<{ kind: 'success' | 'error'; text: string }> {
       try {
         signal.throwIfAborted();
         // Bare invocation is decorated by the Web popup. Non-Web callers get
@@ -57,5 +53,5 @@ export function installPresetCommand(host: PresetCommandHost, entryId: () => str
         return { kind: 'error', text: `Team Agent 预设操作失败：${textOf(error)}` };
       }
     },
-  }));
+  };
 }

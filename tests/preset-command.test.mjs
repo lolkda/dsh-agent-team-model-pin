@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { installPresetCommand } from '../src/preset-command.ts';
+import { createPresetCommand } from '../src/preset-command.ts';
 import { parsePresetSave, resolvePresetPolicy } from '../src/preset-policy.ts';
 
 const NS = 'agent-team-model-pin';
@@ -35,7 +35,7 @@ function harness(options = {}) {
     commands: { register(value) { definition = value; return () => { definition = undefined; }; } },
     effect(callback) { return callback(); },
   };
-  installPresetCommand(host, () => NS);
+  definition = createPresetCommand(host, () => NS);
   return { definition, settings, writes, service, catalog, presets, bump: () => { revision++; },
     invoke: (rawInput, agent = 'lead', signal = new AbortController().signal) => definition.handler({ agent: { id: agent }, rawInput, signal }) };
 }

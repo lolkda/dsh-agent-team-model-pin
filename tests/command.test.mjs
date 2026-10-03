@@ -82,6 +82,7 @@ function makeHarness(options = {}) {
   const warnings = [];
   const mutateCalls = [];
   const commandDefinitions = new Map();
+  const services = new Map();
   const listeners = [];
   const injectCalls = [];
   const effects = [];
@@ -150,6 +151,7 @@ function makeHarness(options = {}) {
         return MEMBERS.get(agent.id);
       },
     },
+    provide(name, value) { services.set(name, value); },
     commands: {
       register(definition) {
         commandDefinitions.set(definition.name, definition);
@@ -162,6 +164,7 @@ function makeHarness(options = {}) {
       return () => {};
     },
     get(serviceName) {
+      if (services.has(serviceName)) return services.get(serviceName);
       if (serviceName === 'settings') return withSettings ? settings : undefined;
       if (serviceName === 'llm') return options.withLlm === false ? undefined : llm;
       return undefined;
@@ -195,11 +198,10 @@ function makeHarness(options = {}) {
   // rc.1 的解析配置：volatile 字段是引用（Loader 就地提交），auditPath 是普通配置。
   apply(ctx, { scope: refs.scope, defaults: refs.defaults, sessions: refs.sessions, auditPath: auditValue });
 
-  const command = () => {
-    const definition = commandDefinitions.get(TEAM_MODEL);
-    assert.ok(definition, `commands.register 没有收到 ${TEAM_MODEL} 定义`);
-    return definition;
-  };
+  // Exercise the preserved model domain through the plugin-owned RPC, not a
+  // Host command that would collide with the localized client menu row.
+  const command = () => ({ name: TEAM_MODEL,
+    handler: ({ agent, rawInput, signal }) => services.get('teamSettings').model(agent, rawInput, signal) });
 
   const invoke = (agent, rawInput) =>
     command().handler({ agent, rawInput, signal: new AbortController().signal });
@@ -255,6 +257,7 @@ function makeHarness(options = {}) {
     warnings,
     mutateCalls,
     commandDefinitions,
+    services,
     listeners,
     injectCalls,
     effects,
@@ -278,12 +281,12 @@ test('1a 导出面：name / inject / Config 与 rc.1 契约一致', () => {
   // 破坏方式：改名、在 inject 里删掉 agentTeams/commands，或不再导出 Config
   //           （rc.1 的 settings 表单只能由导出 Config 的插件投影出来）。
   assert.equal(pluginName, 'agent-team-model-pin');
-  assert.deepEqual(inject, ['agentTeams', 'commands']);
+  assert.deepEqual(inject, ['agentTeams']);
   assert.equal(typeof Config, 'function', 'rc.1 的 settings 表单来自导出的 Config schema');
   assert.equal(typeof Config.toJSON, 'function');
 });
 
-test('1b 命令注册：name=team-model 且带 input.hint；只注册一个 agent/request 监听（5.2.3/5.2.4）', (t) => {
+test('1b 模型 RPC 不注册 Host 菜单项；只注册一个 agent/request 监听', (t) => {
   // 破坏方式：apply 里不调 commands.register（或注册名写错）→ command() 抛断言；
   //           去掉 input.hint → hint 断言失败；把 ctx.on 写在循环/重复插桩里 → 监听器数 !== 1。
   const h = makeHarness();
@@ -291,9 +294,8 @@ test('1b 命令注册：name=team-model 且带 input.hint；只注册一个 agen
 
   const definition = h.command();
   assert.equal(definition.name, TEAM_MODEL);
-  assert.equal(typeof definition.input?.hint, 'string');
-  assert.match(definition.input.hint, /show/);
-  assert.match(definition.input.hint, /clear/);
+  assert.equal(h.commandDefinitions.size, 0);
+  assert.ok(h.services.get('teamSettings'));
   assert.equal(typeof definition.handler, 'function');
   assert.equal(h.listeners.filter((entry) => entry.event === 'agent/request').length, 1);
 });
@@ -771,15 +773,11 @@ test('11b 命令空输入等价于 show；effects 中登记了命令注册（5.2
   assert.equal(empty.text, show.text);
   assert.ok(h.effects.length >= 1, '命令注册应作为 ctx.effect 登记，以便随 fiber 释放');
 });
-test('preset command is registered alongside model command; stock Host refuses preset writes', async (t) => {
-  const h = makeHarness();
-  t.after(h.cleanup);
-  const preset = h.commandDefinitions.get('team-preset');
-  assert.ok(preset);
-  assert.equal(preset.input, undefined);
-  const result = await preset.handler({ agent: leadAgent, rawInput: 'apply 1 "coder"', signal: new AbortController().signal });
+test('model/preset operations use a plugin RPC and stock Host still refuses preset writes', async (t) => {
+  const h = makeHarness(); t.after(h.cleanup);
+  assert.equal(h.commandDefinitions.size, 0);
+  const result = await h.services.get('teamSettings').preset(leadAgent, 1, 'coder', new AbortController().signal);
   assert.equal(result.kind, 'error');
   assert.match(result.text, /childSetupVersion=1/);
   assert.equal(h.mutateCalls.length, 0);
-  assert.equal(h.commandDefinitions.get('team-model').name, 'team-model');
 });

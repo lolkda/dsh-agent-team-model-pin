@@ -19,7 +19,7 @@ test('native commands: the original model selector remains the sole occupant', i
   assert.ok(ui.container.querySelector('button[aria-haspopup="menu"]'));
 });
 
-test('native commands: host decoration and contribution coexist without name collisions', integration, async (t) => {
+test('native commands: localized client contributions coexist with unrelated Host commands', integration, async (t) => {
   const ui = await mount(t);
   const rows = await ui.candidates();
   assert.equal(rows.filter(row => row.name === 'team-model').length, 1);
@@ -158,23 +158,23 @@ test('native commands: a fixed Team route stays editable when the main model cha
   assert.deepEqual(ui.view.value.sessions['lead-A'], { provider: 'p', model: 'team', reasoningEffort: 'low' });
 });
 
-test('native commands: unload dismisses open Team popups and restores host bare command behavior', integration, async (t) => {
+test('native commands: unload dismisses and removes Team popup contributions', integration, async (t) => {
   const ui = await mount(t);
   await ui.enter('/team-model');
   await ui.unload();
   assert.equal(state(ui).open, false);
   assert.equal((await ui.candidates()).some(row => row.name === 'team-effort'), false);
-  assert.ok((await ui.enter('/team-model')).claim);
+  assert.equal(await ui.enter('/team-model'), undefined);
   assert.deepEqual(ui.occupants(), ui.before);
 });
 
-test('native commands: existing argued host commands still use the native claim path', integration, async (t) => {
+test('native commands: unrelated argued Host commands retain their native claim path', integration, async (t) => {
   const ui = await mount(t);
   for (const args of ['show', 'clear', 'p team low']) {
-    const result = await ui.enter(`/team-model ${args}`);
-    assert.equal(result.claim.name, 'team-model');
+    const result = await ui.enter(`/host-example ${args}`);
+    assert.equal(result.claim.name, 'host-example');
     await result.claim.submit(args, undefined, []);
-    assert.equal(ui.calls.executed.at(-1)[1], `/team-model ${args}`);
+    assert.equal(ui.calls.executed.at(-1)[1], `/host-example ${args}`);
   }
   assert.equal(state(ui).open, false);
 });
@@ -285,7 +285,7 @@ test('native commands: client marker follows the package version without a custo
   assert.equal(ui.container.querySelector('[data-team-model-pin]'), null);
 });
 
-test('native preset command: root decoration opens native options without changing main controls', integration, async (t) => {
+test('native preset command: root client contribution opens native options without changing main controls', integration, async (t) => {
   const ui = await mount(t, { teamPreset: true });
   const rows = await ui.candidates();
   assert.equal(rows.filter(row => row.name === 'team-preset').length, 1);
@@ -299,22 +299,22 @@ test('native preset command: root decoration opens native options without changi
   assert.equal(state(ui).options.some(row => row.id.includes('broken')), false);
   assert.deepEqual(ui.occupants(), ui.before);
   assert.equal(ui.container.querySelector('[data-team-model-pin]'), null);
-  assert.deepEqual(ui.calls.executed, []);
+  assert.deepEqual(ui.calls.presetCalls, []);
   assert.deepEqual(ui.calls.settings, []);
   assert.deepEqual(ui.errors, []);
 });
 
-test('native preset command: search and keyboard send the guarded Host apply payload, never direct settings writes', integration, async (t) => {
+test('native preset command: search and keyboard send the guarded plugin RPC payload, never direct settings writes', integration, async (t) => {
   const ui = await mount(t, { teamPreset: true, view: { value: { sessions: { 'lead-A': { model: 'team' } }, presetSessions: { 'lead-B': 'standard' } } } });
   await ui.enter('/team-preset');
   await ui.search('review');
   assert.equal(ui.panel().querySelectorAll('[role="option"]').length, 1);
   await ui.key('Enter');
-  assert.equal(ui.calls.executed.length, 1);
-  const [leadId, line, attachments, signal] = ui.calls.executed[0];
+  assert.equal(ui.calls.presetCalls.length, 1);
+  const [leadId, revision, choice, signal] = ui.calls.presetCalls[0];
   assert.equal(leadId, 'lead-A');
-  assert.equal(line, '/team-preset apply 1 "reviewer"');
-  assert.deepEqual(Array.from(attachments), []);
+  assert.equal(revision, 1);
+  assert.equal(choice, 'reviewer');
   assert.ok(signal instanceof AbortSignal);
   assert.deepEqual(ui.calls.presetWrites, [{ leadId: 'lead-A', revision: 1, choice: 'reviewer' }]);
   assert.deepEqual(ui.calls.settings, []);
@@ -334,8 +334,8 @@ test('native preset command: child contribution targets its Lead, explicit follo
   await ui.enter('/team-preset');
   assert.equal(state(ui).options.find(row => row.active)?.id, '["team-preset","reviewer"]');
   await ui.choose('["team-preset",null]');
-  assert.equal(ui.calls.executed[0][0], 'lead-A');
-  assert.equal(ui.calls.executed[0][1], '/team-preset apply 1 null');
+  assert.equal(ui.calls.presetCalls[0][0], 'lead-A');
+  assert.deepEqual(ui.calls.presetCalls[0].slice(0, 3), ['lead-A', 1, null]);
   assert.equal(ui.view.value.presetSessions['lead-A'], null);
   assert.equal(ui.view.value.presetSessions['mate-A'], undefined);
   assert.deepEqual(ui.calls.settings, []);
@@ -350,7 +350,7 @@ test('native preset command: unsupported Host cannot save or consume the input t
   assert.equal(state(ui).open, true);
   assert.match(state(ui).error, /runtime unsupported/);
   assert.match(ui.container.querySelector('[role="alert"]').textContent, /runtime unsupported/);
-  assert.equal(ui.calls.executed.length, 1);
+  assert.equal(ui.calls.presetCalls.length, 1);
   assert.deepEqual(ui.calls.presetWrites, []);
   assert.deepEqual(ui.calls.settings, []);
   assert.deepEqual(ui.calls.consumed, []);
@@ -368,7 +368,7 @@ test('native preset command: missing catalog only fails its own popup and leaves
   assert.equal(state(ui).status, 'ready');
   assert.equal(state(ui).command, 'team-model');
   assert.deepEqual(ui.occupants(), ui.before);
-  assert.deepEqual(ui.calls.executed, []);
+  assert.deepEqual(ui.calls.presetCalls, []);
   assert.deepEqual(ui.calls.settings, []);
 });
 
@@ -378,7 +378,7 @@ test('native preset command: Host CAS conflict preserves existing policy and req
   ui.setView({ ...ui.view, revision: 2, value: { ...ui.view.value, presetSessions: { 'lead-A': 'standard' } } });
   await ui.choose('["team-preset","reviewer"]');
   assert.match(state(ui).error, /settings\/conflict/);
-  assert.equal(ui.calls.executed[0][1], '/team-preset apply 1 "reviewer"');
+  assert.deepEqual(ui.calls.presetCalls[0].slice(0, 3), ['lead-A', 1, 'reviewer']);
   assert.deepEqual(ui.calls.presetWrites, []);
   assert.deepEqual(ui.calls.settings, []);
   assert.equal(ui.view.value.presetSessions['lead-A'], 'standard');
@@ -386,7 +386,7 @@ test('native preset command: Host CAS conflict preserves existing policy and req
   await ui.key('Escape');
   await ui.enter('/team-preset');
   await ui.choose('["team-preset","reviewer"]');
-  assert.equal(ui.calls.executed[1][1], '/team-preset apply 2 "reviewer"');
+  assert.deepEqual(ui.calls.presetCalls[1].slice(0, 3), ['lead-A', 2, 'reviewer']);
   assert.equal(ui.view.value.presetSessions['lead-A'], 'reviewer');
 });
 
@@ -396,7 +396,7 @@ test('native preset command: removed or broken catalog option fails before invok
   ui.presetRows.find(row => row.id === 'reviewer').broken = 'preset stopped';
   await ui.choose('["team-preset","reviewer"]');
   assert.match(state(ui).error, /已移除或无法加载|removed or cannot be loaded/);
-  assert.deepEqual(ui.calls.executed, []);
+  assert.deepEqual(ui.calls.presetCalls, []);
   assert.deepEqual(ui.calls.presetWrites, []);
   assert.deepEqual(ui.calls.settings, []);
 });
@@ -412,7 +412,7 @@ test('native preset command: model menu writes and native main picker preserve t
   await ui.choose(state(ui).options.find(row => row.label === 'team').id);
   assert.equal(ui.calls.main.at(-1).model, 'team');
   assert.equal(ui.view.value.presetSessions['lead-A'], 'reviewer');
-  assert.equal(ui.calls.executed.length, 1, 'only the preset picker invokes Host apply');
+  assert.equal(ui.calls.presetCalls.length, 1, 'only the preset picker invokes the preset RPC');
   assert.equal(ui.calls.settings.length, 1, 'the Team model picker retains its independent model mutation');
   assert.deepEqual(ui.occupants(), ui.before);
 });
@@ -426,7 +426,7 @@ test('native preset popup works with production-shaped traced Remote namespace s
   await ui.choose('["team-preset","reviewer"]');
   assert.equal(ui.view.value.presetSessions['lead-A'], 'reviewer');
   assert.deepEqual(ui.calls.settings, []);
-  assert.equal(ui.calls.executed.length, 1);
+  assert.equal(ui.calls.presetCalls.length, 1);
   assert.deepEqual(ui.errors, []);
   assert.deepEqual(ui.occupants(), ui.before);
 });
@@ -441,7 +441,7 @@ test('native preset popup localizes built-ins, searches Chinese names and saves 
   await ui.search('创造');
   assert.equal(ui.panel().querySelectorAll('[role="option"]').length, 1);
   await ui.key('Enter');
-  assert.equal(ui.calls.executed[0][1], '/team-preset apply 1 "cordis"');
+  assert.deepEqual(ui.calls.presetCalls[0].slice(0, 3), ['lead-A', 1, 'cordis']);
   assert.equal(ui.view.value.presetSessions['lead-A'], 'cordis');
   assert.deepEqual(ui.calls.settings, []);
   await ui.setLanguage('en');
@@ -450,4 +450,36 @@ test('native preset popup localizes built-ins, searches Chinese names and saves 
   assert.equal(state(ui).options.find(row => row.active).id, '["team-preset","cordis"]');
   assert.deepEqual(ui.errors, []);
   assert.deepEqual(ui.occupants(), ui.before);
+});
+
+
+test('all Team commands have localized titles and one row in root and child menus', integration, async t => {
+  const ui = await mount(t, { teamPreset: true, parents: { 'mate-A': 'lead-A' } });
+  for (const language of ['zh', 'en']) {
+    await ui.setLanguage(language);
+    for (const sessionId of ['lead-A', 'mate-A']) {
+      await ui.switchSession(sessionId);
+      const rows = await ui.candidates();
+      const labels = language === 'zh' ? ['Team 模型', 'Team 推理等级', 'Team 预设'] : ['Team model', 'Team reasoning effort', 'Team preset'];
+      for (const [index, name] of ['team-model', 'team-effort', 'team-preset'].entries()) {
+        const found = rows.filter(row => row.name === name);
+        assert.equal(found.length, 1, name);
+        assert.equal(found[0].label, labels[index]);
+      }
+    }
+  }
+  assert.deepEqual(ui.calls.executed, []);
+  assert.deepEqual(ui.errors, []);
+});
+
+
+test('retired Team argument syntax is refused instead of entering the conversation model', integration, async t => {
+  const ui = await mount(t, { teamPreset: true });
+  for (const line of ['/team-model p team low', '/team-preset set reviewer', '/team-effort high']) {
+    await assert.rejects(ui.enter(line), /选择面板|without arguments/);
+  }
+  assert.deepEqual(ui.calls.executed, []);
+  assert.deepEqual(ui.calls.presetCalls, []);
+  assert.deepEqual(ui.calls.settings, []);
+  assert.equal((await ui.candidates()).some(row => row.name === 'team-settings-input-guard'), false);
 });

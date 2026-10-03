@@ -27,6 +27,7 @@ async function harness(t, config = {}) {
   let mutateCalls = 0;
   let listener;
   const definitions = new Map();
+  const services = new Map();
   const settings = {
     // 真实 SettingsForms 的同步视图：base = Composition 层，user = profile 覆盖。
     // 没有 profile 配置入口的部署不提供 describe()。
@@ -40,10 +41,11 @@ async function harness(t, config = {}) {
   };
   const ctx = {
     logger: { warn() {} },
+    provide(name, value) { services.set(name, value); },
     agentTeams: { tryMembership: (agent) => ({ root, id: 'team', name: agent.id, role: agent.id === root.id ? 'lead' : 'teammate' }) },
     commands: { register(value) { definitions.set(value.name, value); return () => definitions.delete(value.name); } },
     inject(deps, cb) { if (deps.includes('settings')) cb({ settings }); },
-    get(name) { return name === 'settings' ? settings : undefined; },
+    get(name) { return services.get(name) ?? (name === 'settings' ? settings : undefined); },
     on(event, cb) { if (event === 'agent/request') listener = cb; return () => {}; },
     effect(callback) { callback(); return () => {}; },
     fiber: { entry: { options: { id: 'agent-team-model-pin' } } },
@@ -54,7 +56,7 @@ async function harness(t, config = {}) {
     get describeCalls() { return describeCalls; },
     get mutateCalls() { return mutateCalls; },
     setLive(value) { sessions.write(value); },
-    invoke(rawInput) { return definitions.get('team-model').handler({ agent: root, rawInput, signal: new AbortController().signal }); },
+    invoke(rawInput) { return services.get('teamSettings').model(root, rawInput, new AbortController().signal); },
     request(agent = { id: 'child' }) { return listener({ agent }, async () => ({ provider: 'stale', model: 'stale-model', reasoningEffort: 'low', temperature: 0.5 })); },
   };
 }
