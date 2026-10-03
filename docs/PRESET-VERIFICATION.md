@@ -69,3 +69,9 @@ npm pack --ignore-scripts --pack-destination artifacts/preset-1.5.0-rc.1
 - 真实 DSH 新进程启动/恢复测试改经实际 Gateway 调用 `teamSettings.model`，确认 Host 没有冲突的同名 slash 项，配置与模型请求继续正确。
 - 测试保留不可用预设、缺失宿主扩展、CAS、只读和生命周期保护；新增旧参数语法不落入模型的检查。
 - `npm run check`：**255 项测试通过，0 失败、0 跳过**。没有修改 DSH 的官方文件。
+
+## 1.5.0 正式发布验证
+
+- 从已验证的 `1.5.0-rc.4` 晋升，功能、配置与宿主接口要求不变，仅同步 package/lockfile/Client 版本标识及发布说明。
+- `npm run check`：**255 项测试通过，0 失败、0 跳过**；`npm run smoke:dist` 通过。
+- `scripts/release-plan.mjs` 确认正式版本发布到 `latest`，不覆盖 `next` 预发布标签。

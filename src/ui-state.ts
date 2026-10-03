@@ -4,7 +4,7 @@ import type { Pin, Scope } from './pin.ts';
 
 export const SETTINGS_NS = 'agent-team-model-pin';
 /** Client registration marker; no custom DOM or CSS is installed. */
-export const CLIENT_VERSION = '1.5.0-rc.4';
+export const CLIENT_VERSION = '1.5.0';
 export const choiceId = (...parts: (string | null)[]): string => JSON.stringify(parts);
 export interface Selection { provider: string; model: string; reasoningEffort?: string }
 export interface ModelInfo {
