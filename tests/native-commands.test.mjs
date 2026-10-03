@@ -430,3 +430,24 @@ test('native preset popup works with production-shaped traced Remote namespace s
   assert.deepEqual(ui.errors, []);
   assert.deepEqual(ui.occupants(), ui.before);
 });
+
+test('native preset popup localizes built-ins, searches Chinese names and saves the original ID', integration, async t => {
+  const ui = await mount(t, { teamPreset: true, tracedRemotes: true,
+    presetRows: ['standard', 'ptc', 'minimal', 'cordis'].map(id => ({ id, isDefault: id === 'standard' })) });
+  await ui.enter('/team-preset');
+  assert.equal(state(ui).status, 'ready');
+  assert.deepEqual(Array.from(state(ui).options, row => row.label), ['跟随主 Agent', '标准模式', 'PTC 模式', '极简模式', '创造模式']);
+  assert.match(state(ui).options[4].detail, /^cordis · 用对话定制 DSH/);
+  await ui.search('创造');
+  assert.equal(ui.panel().querySelectorAll('[role="option"]').length, 1);
+  await ui.key('Enter');
+  assert.equal(ui.calls.executed[0][1], '/team-preset apply 1 "cordis"');
+  assert.equal(ui.view.value.presetSessions['lead-A'], 'cordis');
+  assert.deepEqual(ui.calls.settings, []);
+  await ui.setLanguage('en');
+  await ui.enter('/team-preset');
+  assert.deepEqual(Array.from(state(ui).options, row => row.label), ['Follow main Agent', 'Standard mode', 'PTC mode', 'Minimal mode', 'Creator mode']);
+  assert.equal(state(ui).options.find(row => row.active).id, '["team-preset","cordis"]');
+  assert.deepEqual(ui.errors, []);
+  assert.deepEqual(ui.occupants(), ui.before);
+});

@@ -1,5 +1,6 @@
 /** Native command policy for FUTURE teammates; never changes an Agent's live preset. */
 import { resolvePresetPolicy } from './preset-policy.ts';
+import { presetDisplayText } from '@deepseek-ai/dsh-agent-preset-registry/display';
 import { choiceId, SETTINGS_NS, teamSessionKey } from './ui-state.ts';
 import type { NamespaceView, Result, SessionsLike } from './ui-state.ts';
 
@@ -79,7 +80,17 @@ interface Opening {
 }
 interface OfferedChoice { opening: Opening; preset: string | null }
 
+// Fallback copy for compositions without DSH's optional preset UI dictionary.
+// Prefer the host's settings.agentPreset translations when that UI is present.
 const zh = {
+  presetStandardName: '标准模式',
+  presetStandardDescription: '处理代码、文件和资料，适合大多数任务。Agent 会按需使用检索、编辑和终端等工具。',
+  presetPtcName: 'PTC 模式',
+  presetPtcDescription: '包含标准模式的所有能力，更适合批量调用工具，并对结果进行筛选、整理、去重、统计或汇总的任务。',
+  presetMinimalName: '极简模式',
+  presetMinimalDescription: 'Agent 仅使用终端工具完成任务，适合测试和对比其基础表现。',
+  presetCordisName: '创造模式',
+  presetCordisDescription: '用对话定制 DSH：让 Agent 编写插件，添加新功能或界面；也能组合工具和提示词，创建自己的模式。',
   preset: 'Team 预设（新队友）',
   description: '选择之后新建队友使用的 Agent 预设；现有队友不变',
   futureOnly: '仅对之后新建的队友生效，现有队友保持原预设',
@@ -96,6 +107,14 @@ const zh = {
   invalidSettings: 'Team 预设设置缺少有效版本号，请重新打开选择菜单',
 };
 const en: typeof zh = {
+  presetStandardName: 'Standard mode',
+  presetStandardDescription: 'Work with code, files, and information. Suitable for most tasks, with search, editing, terminal commands, and other tools available as needed.',
+  presetPtcName: 'PTC mode',
+  presetPtcDescription: 'Includes all Standard mode capabilities. Better suited to tasks that call tools in batches and then filter, organize, deduplicate, count, or summarize the results.',
+  presetMinimalName: 'Minimal mode',
+  presetMinimalDescription: 'The agent works using only a terminal tool. Useful for testing and comparing its basic performance.',
+  presetCordisName: 'Creator mode',
+  presetCordisDescription: 'Customize DSH through conversation. Let the agent write plugins that add features or UI, or combine tools and prompts to create your own mode.',
   preset: 'Team preset (new teammates)',
   description: 'Choose the Agent preset for future teammates; existing teammates stay unchanged',
   futureOnly: 'Applies only to new teammates; existing teammates keep their preset',
@@ -135,6 +154,12 @@ function readPreset(view: NamespaceView, key: string): string | null | undefined
 export function installPresetCommand(ctx: PresetClientContext): void {
   ctx.effect(() => ctx.locale.register('agentTeamPreset', { zh, en }));
   const t = ctx.locale.bind('agentTeamPreset');
+  const nativePresetText = ctx.locale.bind('settings.agentPreset');
+  const display = (row: PresetRow) => presetDisplayText(row, key => {
+    const translated = nativePresetText(key);
+    // DSH Locale.bind returns the bare key when no dictionary supplies it.
+    return translated === key ? t(key) : translated;
+  });
   const commands = ctx.commandUi;
   const offered = new WeakMap<SelectOption, OfferedChoice>();
   let live = true;
@@ -225,8 +250,11 @@ export function installPresetCommand(ctx: PresetClientContext): void {
       };
       return [offer({ id: choiceId('team-preset', null), label: t('follow'),
         detail: `${t('followDetail')} · ${t('futureOnly')}`, active: selected == null }, null),
-      ...rows.map(row => offer({ id: choiceId('team-preset', row.id), label: row.name || row.id,
-        detail: [row.id, row.description, t('futureOnly')].filter(Boolean).join(' · '), active: selected === row.id }, row.id))];
+      ...rows.map(row => {
+        const text = display(row);
+        return offer({ id: choiceId('team-preset', row.id), label: text.name || row.id,
+          detail: [row.id, text.description, t('futureOnly')].filter(Boolean).join(' · '), active: selected === row.id }, row.id);
+      })];
     },
     async onSelect(option, { sessionId }) {
       const choice = offered.get(option);

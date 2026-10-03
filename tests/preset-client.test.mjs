@@ -412,3 +412,59 @@ test('preset IDs are JSON-escaped in Host command payload, not interpolated as a
   assert.equal(h.state.view.value.presetSessions['lead-A'], id);
   assert.equal(h.state.directWrites, 0);
 });
+
+test('built-in preset names/descriptions are localized, with IDs retained and saved unchanged', async () => {
+  const h = harness({ language: 'zh' });
+  h.state.rows = ['standard', 'ptc', 'minimal', 'cordis'].map(id => ({ id }));
+  const before = structuredClone(h.state.rows);
+  let popup = await h.open();
+  assert.deepEqual(popup.rows.slice(1).map(row => row.label), ['标准模式', 'PTC 模式', '极简模式', '创造模式']);
+  for (const row of popup.rows.slice(1)) {
+    const id = JSON.parse(row.id)[1];
+    assert.ok(row.detail.startsWith(id + ' · '));
+    assert.doesNotMatch(row.detail, /preset\w+(Name|Description)/);
+  }
+  assert.match(popup.rows[1].detail, /处理代码/);
+  assert.match(popup.rows[4].detail, /用对话定制 DSH/);
+  await popup.choose('cordis');
+  assert.equal(h.state.view.value.presetSessions['lead-A'], 'cordis');
+  assert.equal(h.state.executed[0].line, '/team-preset apply 4 "cordis"');
+  assert.deepEqual(h.state.rows, before, 'display folding must not mutate catalog metadata');
+  h.state.language = 'en';
+  popup = await h.open();
+  assert.deepEqual(popup.rows.slice(1).map(row => row.label), ['Standard mode', 'PTC mode', 'Minimal mode', 'Creator mode']);
+  assert.match(popup.rows[1].detail, /Work with code/);
+  assert.equal(popup.rows[4].active, true);
+});
+
+test('native preset locale dictionary wins; absent keys fall back without mounting preset UI', async () => {
+  const h = harness({ language: 'zh' });
+  h.state.rows = [{ id: 'standard' }, { id: 'minimal' }];
+  const stop = h.ctx.locale.register('settings.agentPreset', {
+    zh: { presetStandardName: '宿主标准模式', presetStandardDescription: '宿主维护的说明' },
+  });
+  let popup = await h.open();
+  assert.equal(popup.rows[1].label, '宿主标准模式');
+  assert.match(popup.rows[1].detail, /宿主维护的说明/);
+  assert.equal(popup.rows[2].label, '极简模式');
+  stop();
+  popup = await h.open();
+  assert.equal(popup.rows[1].label, '标准模式');
+});
+
+test('custom preset metadata stays literal even when its ID matches a built-in', async () => {
+  const h = harness({ language: 'zh' });
+  h.state.rows = [
+    { id: 'standard', name: '我的标准 Standard', description: 'Custom text 不翻译' },
+    { id: 'reviewer', name: '审查 Reviewer', description: 'Review only' },
+    { id: 'future-preset', description: '未知预设原始说明' },
+  ];
+  for (const language of ['zh', 'en']) {
+    h.state.language = language;
+    const popup = await h.open();
+    assert.deepEqual(popup.rows.slice(1).map(row => row.label), ['我的标准 Standard', '审查 Reviewer', 'future-preset']);
+    assert.match(popup.rows[1].detail, /Custom text 不翻译/);
+    assert.match(popup.rows[2].detail, /Review only/);
+    assert.match(popup.rows[3].detail, /未知预设原始说明/);
+  }
+});

@@ -53,3 +53,10 @@ npm pack --ignore-scripts --pack-destination artifacts/preset-1.5.0-rc.1
 - 在真实原生命令弹层中新增可追踪命名空间回归。
 - `npm run check`：**248 项测试通过，0 失败、0 跳过**；`npm run smoke:dist` 通过。
 - 不改变宿主扩展要求，不改动用户的 preset/model/effort 配置。
+
+## 1.5.0-rc.3：内置预设本地化
+
+- 复用 SDK 的纯 `presetDisplayText()`，优先使用原生 `settings.agentPreset` 词典；缺少原生预设 UI 时用自有中英文后备文案。
+- 内置预设名和说明按界面语言展示，英文 ID 留在详情；自定义名字/说明原样保留，包括自定义 preset 使用内置同名 ID 的情况。
+- 单元验证中文/英文切换、原生文案优先级、词典缺失、元数据不变以及原始 ID 保存；真实原生面板验证中文搜索、键盘选择和 RPC payload。
+- `npm run check`：**252 项测试通过，0 失败、0 跳过**；`npm run smoke:dist` 通过。
