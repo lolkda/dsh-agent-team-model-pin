@@ -416,3 +416,17 @@ test('native preset command: model menu writes and native main picker preserve t
   assert.equal(ui.calls.settings.length, 1, 'the Team model picker retains its independent model mutation');
   assert.deepEqual(ui.occupants(), ui.before);
 });
+
+
+test('native preset popup works with production-shaped traced Remote namespace services', integration, async (t) => {
+  const ui = await mount(t, { teamPreset: true, tracedRemotes: true });
+  await ui.enter('/team-preset');
+  assert.equal(state(ui).status, 'ready');
+  assert.ok(state(ui).options.some(row => row.id === '["team-preset","reviewer"]'));
+  await ui.choose('["team-preset","reviewer"]');
+  assert.equal(ui.view.value.presetSessions['lead-A'], 'reviewer');
+  assert.deepEqual(ui.calls.settings, []);
+  assert.equal(ui.calls.executed.length, 1);
+  assert.deepEqual(ui.errors, []);
+  assert.deepEqual(ui.occupants(), ui.before);
+});

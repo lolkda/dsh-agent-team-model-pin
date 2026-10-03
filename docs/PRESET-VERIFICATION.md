@@ -45,3 +45,11 @@ npm pack --ignore-scripts --pack-destination artifacts/preset-1.5.0-rc.1
 ```
 
 本地候选包：`artifacts/preset-1.5.0-rc.1/lolkda-dsh-agent-team-model-pin-1.5.0-rc.1.tgz`，SHA-256 见同目录 `SHA256SUMS`。该目录不纳入 Git。
+
+## 1.5.0-rc.2：RPC 代理身份误判修复
+
+- 原用例只把 Remote facade 做成 Service，命名空间仍为普通对象，漏掉了实际 SDK 每次读取命名空间都会产生新代理的行为。
+- 将命名空间改为真实 Cordis Service 后，未修复版本可稳定复现「会话或菜单状态已变化」；修复后可以加载和保存，服务卸载/重挂仍会正确拒绝旧选择。
+- 在真实原生命令弹层中新增可追踪命名空间回归。
+- `npm run check`：**248 项测试通过，0 失败、0 跳过**；`npm run smoke:dist` 通过。
+- 不改变宿主扩展要求，不改动用户的 preset/model/effort 配置。

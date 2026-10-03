@@ -155,12 +155,23 @@ export async function mount(t, options = {}) {
   };
   const source = { getSnapshot: () => currentBinding,
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); } };
+  // Production gateway namespaces are tracked Services. The optional variant
+  // reproduces Cordis returning a fresh caller-bound Proxy on each lookup.
+  const provideRemote = (ctx, name, implementation) => {
+    if (!options.tracedRemotes) return ctx.provide(`remote.${name}`, implementation);
+    class Namespace extends Service {
+      constructor(owner) { super(owner, `remote.${name}`); }
+    }
+    const service = new Namespace(ctx);
+    Object.assign(service, implementation);
+    return service;
+  };
   await root.plugin({ name: 'command-io', apply(ctx) {
     ctx.provide('locale', locale);
     ctx.provide('sessions', sessions);
     ctx.provide('conversation', { input: { for: () => ({ focus: () => { calls.focused++; } }) } });
     ctx.provide('inputTriggers', { registerSource(value) { slash = value; return () => { slash = undefined; }; } });
-    ctx.provide('remote.commands', {
+    provideRemote(ctx, 'commands', {
       list: async () => ({ ok: true, value: [
         { name: 'team-model', description: 'Team model', input: { hint: '<provider> <model> [effort]' } },
         ...(options.teamPreset ? [{ name: 'team-preset', description: 'Team preset for new teammates' }] : []),
@@ -177,7 +188,7 @@ export async function mount(t, options = {}) {
         return { ok: true, value: { result: { kind: 'success' } } };
       },
     });
-    if (options.teamPreset && !options.omitPresetCatalog) ctx.provide('remote.agentPresets', {
+    if (options.teamPreset && !options.omitPresetCatalog) provideRemote(ctx, 'agentPresets', {
       async list() {
         calls.presetCatalog++;
         return options.presetCatalog?.() ?? { ok: true, value: { presets: presetRows } };

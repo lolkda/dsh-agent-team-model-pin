@@ -194,28 +194,50 @@ test('optional Cordis namespace is resolved through the injected child, not unde
     get agentPresets() { return this.ctx['remote.agentPresets']; }
     get commands() { return this.ctx['remote.commands']; }
   }
+  // Real DSH Remote namespaces are Cordis Services, not plain objects. Every
+  // context read creates a fresh caller-traced Proxy around the same service.
+  class CommandsNamespace extends Service {
+    constructor(ctx) { super(ctx, 'remote.commands'); }
+    execute(...args) { return h.ctx.remote.commands.execute(...args); }
+  }
+  class CatalogNamespace extends Service {
+    constructor(ctx) { super(ctx, 'remote.agentPresets'); }
+    list() { return h.ctx.remote.agentPresets.list(); }
+  }
   const services = await root.plugin({ name: 'preset-test-services', apply(ctx) {
     ctx.provide('commandUi', h.ctx.commandUi);
     ctx.provide('sessions', h.ctx.sessions);
     ctx.provide('locale', h.ctx.locale);
     ctx.provide('remote.settings', h.ctx.remote.settings);
-    ctx.provide('remote.commands', h.ctx.remote.commands);
+    new CommandsNamespace(ctx);
     new RemoteFacade(ctx);
   } });
   const mounted = await root.plugin({ name: 'preset-test-client',
     inject: ['commandUi', 'sessions', 'locale', 'remote', 'remote.settings'], apply: installPresetCommand });
   t.after(async () => { await mounted.dispose(); await services.dispose(); });
   await assert.rejects(h.open(), /catalog is unavailable/);
-  const catalog = await root.plugin({ name: 'preset-test-catalog', apply(ctx) { ctx.provide('remote.agentPresets', h.ctx.remote.agentPresets); } });
+  const catalog = await root.plugin({ name: 'preset-test-catalog', apply(ctx) { new CatalogNamespace(ctx); } });
   // Cordis settles dynamic child activation after its required service appears.
   await catalog.await();
   await new Promise(resolve => setImmediate(resolve));
+  assert.notEqual(root.get('remote.agentPresets'), root.get('remote.agentPresets'), 'the SDK retraces each read');
+  assert.notEqual(root.get('remote.commands'), root.get('remote.commands'), 'commands use the same tracing protocol');
   const popup = await h.open();
   assert.equal(popup.rows.length, 3);
   await popup.choose('reviewer');
+  const stale = await h.open();
   await catalog.dispose();
   await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(stale.choose('standard'), /Reopen/);
   await assert.rejects(h.open(), /catalog is unavailable/);
+  const replacement = await root.plugin({ name: 'preset-test-catalog-replacement', apply(ctx) { new CatalogNamespace(ctx); } });
+  await replacement.await();
+  await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(stale.choose('standard'), /Reopen/, 'a new injection lifetime must not revive old choices');
+  const fresh = await h.open();
+  await fresh.choose('standard');
+  assert.equal(h.state.view.value.presetSessions['lead-A'], 'standard');
+  await replacement.dispose();
 });
 
 for (const [label, setup, pattern] of [

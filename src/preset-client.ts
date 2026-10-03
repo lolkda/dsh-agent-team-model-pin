@@ -144,12 +144,17 @@ export function installPresetCommand(ctx: PresetClientContext): void {
 
   if (ctx.inject) {
     ctx.inject(['remote.agentPresets'], child => {
-      const source = () => child.remote.agentPresets;
+      // Cordis creates a new traced Proxy on every Context service read.
+      // Retain one caller-bound handle for this injection lifetime; comparing
+      // fresh reads would falsely invalidate every opened menu.
+      const remote = child.remote.agentPresets;
+      const source = () => remote;
       catalogSource = source;
       child.effect(() => () => { if (catalogSource === source) catalogSource = undefined; });
     });
     ctx.inject(['remote.commands'], child => {
-      const source = () => child.remote.commands;
+      const remote = child.remote.commands;
+      const source = () => remote;
       commandSource = source;
       child.effect(() => () => { if (commandSource === source) commandSource = undefined; });
     });

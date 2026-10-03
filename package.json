@@ -1,6 +1,6 @@
 {
   "name": "@lolkda/dsh-agent-team-model-pin",
-  "version": "1.5.0-rc.1",
+  "version": "1.5.0-rc.2",
   "description": "DSH Host/Web plugin: choose Team models, reasoning effort and creation-time Agent presets with native command menus",
   "keywords": [
     "dsh",
