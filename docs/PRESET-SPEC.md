@@ -13,7 +13,7 @@
 
 已核对的原版 SDK 为 DSH 0.2.0-rc.2。continuation activation 的 setup 归宿主管理，provider 只能贡献 seed。`agent/created` 是 awaited，但 Cordis 在进入第一个监听器前已按旧 scope 过滤并快照回调列表。即使 prepend 回调中调用 `agentPresets.mount()`，旧预设的初始化仍可能运行，新预设的初始化不会补发。重新 dispatch 或修改内部监听器均不可接受。
 
-因此完整实现需要可检测的 `subagents.childSetupVersion = 1` / `registerChildSetup()` 接口。创建前回调在未发布的 child scope 内、原生 delegation composition 之后、Session/Agent created 事件之前完成；返回的 commit 在发布前验证取消/插件卸载等条件。原版宿主缺少接口时不启用预设写入，保留旧模型功能。人工配置的固定预设也不能在不支持的宿主上悄悄运行。
+因此完整实现需要可检测的 `subagents.childSetupVersion = 1` / `registerChildSetup()` 接口。创建前回调在未发布的 child scope 内、原生 delegation composition 之后、Session/Agent created 事件之前完成；返回的 commit 在发布前验证取消/插件卸载等条件。原版宿主缺少接口时不启用具体预设写入（显式「跟随主 Agent」= null 是原版子会话既有行为，可以保存），保留旧模型功能。人工配置的固定预设也不能在不支持的宿主上悄悄运行。
 
 补丁仅作为源文件和验收工件提供，不自动安装或修改系统中的 DSH。测试应加载隔离的补丁候选，不 monkeypatch 运行中的 AgentRegistry/TeamService。
 

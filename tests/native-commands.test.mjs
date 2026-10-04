@@ -358,6 +358,18 @@ test('native preset command: unsupported Host cannot save or consume the input t
   assert.deepEqual(ui.occupants(), ui.before);
 });
 
+test('native preset command: unsupported Host still saves explicit follow (null) without a pre-publication hook', integration, async (t) => {
+  const ui = await mount(t, { teamPreset: true, presetSupported: false });
+  await ui.enter('/team-preset');
+  await ui.choose('["team-preset",null]');
+  assert.equal(state(ui).open, false);
+  assert.deepEqual(ui.calls.presetWrites, [{ leadId: 'lead-A', revision: 1, choice: null }]);
+  assert.equal(ui.calls.presetCalls.length, 1);
+  assert.deepEqual(ui.calls.settings, []);
+  assert.equal(ui.view.value.presetSessions['lead-A'], null);
+  assert.equal(ui.calls.consumed.length, 1);
+});
+
 test('native preset command: missing catalog only fails its own popup and leaves model menus available', integration, async (t) => {
   const ui = await mount(t, { teamPreset: true, omitPresetCatalog: true });
   await ui.enter('/team-preset');

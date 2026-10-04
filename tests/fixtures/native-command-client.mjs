@@ -115,7 +115,9 @@ export async function mount(t, options = {}) {
   ];
   const commandResult = (kind, text) => ({ ok: true, value: { kind, text } });
   const applyPresetCommand = async (leadId, revision, choice, signal) => {
-    if (options.presetSupported === false) return commandResult('error', 'Team preset runtime unsupported; install the pre-publication hook');
+    // Mirrors the Host gate: explicit null (follow Lead) is stock child
+    // behavior and is safe without the pre-publication hook.
+    if (choice !== null && options.presetSupported === false) return commandResult('error', 'Team preset runtime unsupported; install the pre-publication hook');
     if (options.readOnly) return commandResult('error', 'settings/read-only');
     if (revision !== view.revision) return commandResult('error', 'settings/conflict');
     if (typeof choice !== 'string' && choice !== null) return commandResult('error', 'invalid preset choice');

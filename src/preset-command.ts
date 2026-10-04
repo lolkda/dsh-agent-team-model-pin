@@ -30,14 +30,17 @@ export function createPresetCommand(host: PresetCommandHost, entryId: () => stri
         const membership = host.agentTeams.tryMembership(agent);
         if (!membership) return { kind: 'error', text: '当前 Agent 不属于可配置的 Agent Team，未写入设置。' };
         const leadId = membership.root.id;
-        if (!supportsTeamPresetRuntime(host)) throw new Error(PRESET_RUNTIME_REQUIRED);
+        const { choice } = save;
+        // Following the Lead is the stock child-composition behavior, so an
+        // explicit null can be persisted without the pre-publication hook.
+        // Selecting a concrete preset still requires childSetupVersion=1.
+        if (typeof choice === 'string' && !supportsTeamPresetRuntime(host)) throw new Error(PRESET_RUNTIME_REQUIRED);
         const catalog = host.get('agentPresets') as PresetCatalog | undefined;
         const settings = host.get('settings') as Settings | undefined;
         if (!settings || typeof settings.describe !== 'function') throw new Error('settings 服务不可用，无法安全保存 Team Agent 预设');
         const revision = settings.describe().find(item => item.ns === entryId())?.revision;
         if (!Number.isSafeInteger(revision) || revision! < 0) throw new Error('Team 设置尚未就绪，无法获取配置 revision；未写入');
         if (save.revision !== revision) throw new Error('Team 设置 revision 已变化；请重新打开 /team-preset 菜单');
-        const { choice } = save;
         if (typeof choice === 'string') {
           if (!catalog || typeof catalog.resolve !== 'function') throw new Error('agentPresets 服务不可用；未写入');
           await assertPresetSelectable(catalog, choice);

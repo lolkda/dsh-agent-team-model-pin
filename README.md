@@ -4,13 +4,18 @@ DSH Agent Team 模型选择插件。**1.4.0 起通过原生 `/team-model` 和 `/
 
 源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。
 
+## 1.5.1：修复版
+
+- 修复 `/team-preset` 在未应用宿主补丁时连「跟随主 Agent」都无法保存的问题。显式 null 是原版子会话的既有行为，现在未扩展宿主也可保存；选择具体预设仍按安全边界要求 `childSetupVersion=1`。
+- 具体预设保存失败的提示会说明「跟随主 Agent」无需该接口，可以正常保存。
+
 ## 1.5.0：正式版
 
 将已验证的 `1.5.0-rc.4` 实现晋升为正式版，发布到 npm 的 `latest` 标签；本次不改变功能、配置格式或保存行为。
 
 - 三个原生选择菜单统一显示「Team 模型 / Team 推理等级 / Team 预设」，内置预设名称与说明支持中英文。
 - 用户只需输入裸命令选择，不需要填写参数；保存通过现有 Settings / 插件自己的 RPC 完成，不为菜单标题修改 DSH。
-- **预设在新队友创建时真正应用仍需要 `childSetupVersion=1` 的宿主接口。** 正式版本号不代表原版 DSH `0.2.0-rc.2` 已补齐此接口；缺少时仍明确拒绝保存，不静默回退。
+- **预设在新队友创建时真正应用仍需要 `childSetupVersion=1` 的宿主接口。** 正式版本号不代表原版 DSH `0.2.0-rc.2` 已补齐此接口；缺少时仍明确拒绝保存具体预设，不静默回退。「跟随主 Agent」是原版子会话的既有行为，因此即使缺少该接口也可以保存显式 null。
 - 升级后重启 DSH 并刷新页面，确保 Host 与 Client 同版。
 
 以下 rc 章节保留为历史修复记录。
@@ -49,7 +54,7 @@ DSH Agent Team 模型选择插件。**1.4.0 起通过原生 `/team-model` 和 `/
 
 **模型与思考等级继续兼容原有宿主；新增预设功能需要宿主的创建前接口，原版 DSH `0.2.0-rc.2` 不具备。**
 
-本包不会修改官方包、替换运行中的工厂、安装第二份 SDK，也不会在 `agent/created` 后偷偷换预设。随包提供 `patches/` 下可审查的宿主扩展补丁，需由宿主维护者单独应用、验证及重启；或者使用实现相同接口的 DSH。接口按 `subagents.childSetupVersion === 1` 和 `registerChildSetup()` 实际能力检测，不能只靠版本号判断。未经扩展的宿主仍能使用 `/team-model`、`/team-effort`，但 `/team-preset` 保存会明确报错并保持零写入。
+本包不会修改官方包、替换运行中的工厂、安装第二份 SDK，也不会在 `agent/created` 后偷偷换预设。随包提供 `patches/` 下可审查的宿主扩展补丁，需由宿主维护者单独应用、验证及重启；或者使用实现相同接口的 DSH。接口按 `subagents.childSetupVersion === 1` 和 `registerChildSetup()` 实际能力检测，不能只靠版本号判断。未经扩展的宿主仍能使用 `/team-model`、`/team-effort`；`/team-preset` 仍可选择「跟随主 Agent」并保存，但选择具体预设会明确报错并保持零写入。
 
 ### 使用与生效边界
 

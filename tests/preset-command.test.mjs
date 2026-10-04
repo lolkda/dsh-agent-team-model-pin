@@ -81,6 +81,14 @@ test('popup follow selection writes explicit null without clearing unrelated set
   assert.deepEqual(h.settings.sessions, beforeModel);
 });
 
+test('popup follow selection is safe to persist even when the native child-setup patch is absent', async () => {
+  const h = harness({ unsupported: true });
+  const result = await h.invoke('apply 7 null');
+  assert.equal(result.kind, 'success');
+  assert.equal(h.settings.presetSessions.lead, null);
+  assert.equal(h.writes.length, 1);
+});
+
 for (const [label, options, input, pattern] of [
   ['unsupported host', { unsupported: true }, 'apply 7 "coder"', /创建前预设接口/],
   ['missing registry', { noPresets: true }, 'apply 7 "coder"', /agentPresets/],
