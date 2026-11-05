@@ -30,7 +30,7 @@ test('actual AgentLoop: captured model request and persisted prompt share the se
   let lead;
   let pins = { 'loop-lead': { provider: 'cpa', model: 'deepseek-flash', modelDefault: true } };
   await use({ name: 'loop-test-io', apply(owner) {
-    owner.provide('tools', {});
+    owner.provide('tools', { resolve: () => ({ dispose() {} }) });
     owner.provide('llm', { async prepareCall(config) {
       return { config, stream(request) { requests.push(request); throw sentinel; } };
     } });
@@ -51,7 +51,7 @@ test('actual AgentLoop: captured model request and persisted prompt share the se
   await use(AgentLoop, {});
   root.get('systemPrompt').section({ name: 'identity-proof', order: 100, text: 'request-identity={{provider}}/{{model}}' });
   const pluginFiber = await use(plugin, { scope: 'teammates', defaults: {}, sessions: pins, auditPath: join(dir, 'audit.jsonl') });
-  const liveSessions = pluginFiber.config.sessions;
+  const liveSessions = pluginFiber.effectiveConfig.sessions;
   const setPins = (value) => { pins = value; liveSessions[Symbol.for('cosmokit.volatile.write')](value); };
   t.after(async () => {
     for (const fiber of owned.reverse()) await fiber.dispose();

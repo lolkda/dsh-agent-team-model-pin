@@ -2,6 +2,8 @@
 
 > 本文件是本次开发的**唯一契约源**。`core-dev`、`plugin-dev`、`verifier` 的任务输入都是它。
 > 任何实现与本文冲突，以本文为准；需要改契约时先回报 Lead，由 Lead 更新本文后各方再动。
+> 1.6.0 适配注（DSH 0.2.2）：第 4 节 R5 的“请求进入 `agent/request` 时读取当前解析结果”改由 Agent 原生模型选择实现——在 `agent/inbox/claimed`（标准 Loop 捕获本步 `modelSelection` 之前）和 `agent/status = running` 时调用 `agent.model.current()/select()`。R5 的对外语义不变：改钉后下一次组装生效，本步及重试复用已捕获选择，已发出的请求不回改。`agent/request` 不再允许修改 provider/model/reasoningEffort。
+>
 > 当前补充契约：插件 1.4.0。第 15 节定义原生斜杠菜单，取代历史的自写模型选择器与四项菜单要求；第 14 节的 optional-peer `*` 和 SDK 单实例要求继续保留。第 8 节是历史团队协作安排，本轮由主 Agent 单独修改、验证，不启动队友。
 
 ## 1. 目标与成功标准

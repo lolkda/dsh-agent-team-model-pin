@@ -36,6 +36,7 @@ async function stageProfile(t, withPlugin) {
   await writeFile(join(profile, 'cordis.patch.yml'), JSON.stringify([{ insert: [
     { id: 'system-prompt', name: '@deepseek-ai/dsh-system-prompt', config: {} },
     { id: 'session-projection', name: '@deepseek-ai/dsh-session-projection' },
+    { id: 'agents', name: '@deepseek-ai/dsh-agent' },
     { id: 'agent-preset-registry', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'fixture' } },
     { id: 'preset-fixture', name: '@deepseek-ai/dsh-agent-preset', config: {
       id: 'fixture', order: 1, plugins: [

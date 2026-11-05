@@ -12,10 +12,10 @@ import { AgentLoop } from '@deepseek-ai/dsh-agent-loop';
 import PresetRegistry from '@deepseek-ai/dsh-agent-preset-registry';
 import { SessionStore } from '@deepseek-ai/dsh-session';
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
-import JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl';
+import * as JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl';
 import { SessionQueryEngine } from '@deepseek-ai/dsh-session-query';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
-import ToolRuntime from '@deepseek-ai/dsh-tools';
+import { ToolRuntime } from '@deepseek-ai/dsh-tools';
 import TeamService from '@deepseek-ai/dsh-experimental-agent-team';
 import * as TeamTools from '@deepseek-ai/dsh-experimental-tool-agent-team';
 import * as Spawn from '@deepseek-ai/dsh-subagent-spawn-in-process';
@@ -33,7 +33,13 @@ const presetOf = (h, agent) => h.root.get('agentPresets').composedPreset(agent.c
 
 async function harness(t, requested = 'beta', fullPlugin = false) {
   const home = await mkdtemp(join(tmpdir(), 'atmp-preset-team-'));
-  const extended = await loadPatchedSubagent();
+  let extended;
+  try {
+    extended = await loadPatchedSubagent();
+  } catch (error) {
+    t.skip(`Deployment DSH does not expose childSetupVersion: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
   const root = new Context();
   const handles = [];
   t.after(async () => {
@@ -49,6 +55,10 @@ async function harness(t, requested = 'beta', fullPlugin = false) {
   await use(AgentRegistry);
   await use(SystemPrompt);
   await use(ToolRuntime);
+  root.get('tools').setExecutor({
+    describe: () => ({ schemas: [], knownNames: new Set() }),
+    async execute() { return { results: [], additionalContexts: [], concluded: false }; },
+  });
   await use(JsonlPersistence, { root: join(home, 'sessions'), compression: 'none' });
   await use(SessionQueryEngine);
   const initialized = new Map();
@@ -92,6 +102,7 @@ async function harness(t, requested = 'beta', fullPlugin = false) {
     registrations.set(id, await root.get('agentPresets').register({ id, plugins: [{ name: 'cordis:fixture-preset', config: { id } }] }));
   }
   await use(AgentLoop, {});
+  root.provide('workingDirectory', { get: () => home, async ensure() { return home; }, async set() {} });
   await use(extended.module.default, {});
   await use(Spawn, { providerName: 'fresh' });
   root.get('subagents').registerProvider({ name: 'fork', inheritsParentContext: true,
@@ -135,7 +146,7 @@ async function harness(t, requested = 'beta', fullPlugin = false) {
   const resume = async child => {
     const id = child.id;
     const name = root.get('agentTeams').listMembers(lead).find(row => row.id === id).name;
-    await root.get('subagents').drainContinuableChildren(lead, [id]);
+    await root.get('subagents').drainChildren(lead, [id]);
     assert.equal(root.get('agents').get(id), undefined);
     const count = requests.length;
     await root.get('agentTeams').sendMessage(lead, { target: name, content: blocks('resume work'), signal: new AbortController().signal });
@@ -144,7 +155,7 @@ async function harness(t, requested = 'beta', fullPlugin = false) {
     await requestAfter(count);
     return restored;
   };
-  return { root, home, initialized, requests, failures, stopIO, lead, selector, registrations, runLead, spawn, resume,
+  return { root, home, initialized, requests, failures, stopIO, lead, selector, registrations, runLead, spawn, resume, requestAfter,
     captures: () => captures, setPolicy: value => { policy = value; } };
 }
 
@@ -231,7 +242,7 @@ test('real Team preset choice is frozen before later setup callbacks change futu
 test('real Team missing persisted preset refuses cold resume instead of changing identity', { timeout: 15000 }, async t => {
   const h = await harness(t);
   const child = await h.spawn();
-  await h.root.get('subagents').drainContinuableChildren(h.lead, [child.id]);
+  await h.root.get('subagents').drainChildren(h.lead, [child.id]);
   await h.registrations.get('beta')();
   h.setPolicy('gamma');
   const count = h.requests.length;
@@ -246,9 +257,11 @@ test('real Team missing persisted preset refuses cold resume instead of changing
 
 test('real ordinary continuable subagent is not affected by Team creation policy', { timeout: 15000 }, async t => {
   const h = await harness(t);
-  const result = await h.root.get('subagents').startContinuable({ provider: 'fresh', label: 'ordinary child',
+  const count = h.requests.length;
+  const result = await h.root.get('subagents').startActivation({ delivery: 'parent', provider: 'fresh', label: 'ordinary child',
     request: { parent: h.lead, prompt: blocks('ordinary') }, signal: new AbortController().signal });
   const child = h.root.get('agents').get(result.childId);
+  await h.requestAfter(count);
   assert.ok(child);
   assert.equal(presetOf(h, child), 'alpha');
   assert.deepEqual(h.initialized.get(child.id), ['alpha']);

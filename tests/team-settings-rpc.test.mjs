@@ -10,7 +10,9 @@ import { TEAM_SETTINGS_REMOTE } from '../src/team-settings-remote.ts';
 test('real public Gateway mounts plugin RPC without a Host slash command or native modification', async t => {
   const host = new Context(), client = new Context();
   t.after(async () => { await client.fiber.dispose(); await host.fiber.dispose(); });
-  await host.plugin(TypertRegistry); await host.plugin(TypertGatewayService, {});
+  await host.plugin(TypertRegistry);
+  await host.plugin({ name: 'test-remote-access', apply(ctx) { ctx.provide('remoteAccess', { decide: () => ({ kind: 'allow' }) }); } });
+  await host.plugin(TypertGatewayService, {});
   const lead = { id: 'lead' }; const calls = [];
   await host.get('typert').lookups.register('agent', { parameter: 'agent', wire: 'agentId', hostTypeSymbol: 'Agent', wireTypeSymbol: 'SessionId', resolve: id => id === lead.id ? lead : undefined });
   let owner;
@@ -19,20 +21,22 @@ test('real public Gateway mounts plugin RPC without a Host slash command or nati
       preset: async input => { calls.push(input); return { kind: 'success', text: input.rawInput }; } });
   } });
   const gateway = host.get('typertGateway');
-  const direct = await gateway.invoke({ namespace: 'teamSettings', method: 'preset', args: { agentId: 'lead', revision: 7, choice: '标准 "quoted"' } });
+  const peer = { id: 'test-peer', ctx: host, principal: { kind: 'owner' },
+    signal: new AbortController().signal, interactions: 'none', dispose: async () => {} };
+  const direct = await gateway.invoke({ peer, namespace: 'teamSettings', method: 'preset', args: { agentId: 'lead', revision: 7, choice: '标准 "quoted"' } });
   assert.equal(direct.kind, 'success');
   assert.equal(calls[0].agent, lead);
   assert.equal(calls[0].rawInput, 'apply 7 "标准 \\"quoted\\""');
   assert.ok(calls[0].signal instanceof AbortSignal);
-  await assert.rejects(gateway.invoke({ namespace: 'teamSettings', method: 'preset', args: { agentId: 'absent', revision: 7, choice: 'x' } }));
-  await assert.rejects(gateway.invoke({ namespace: 'teamSettings', method: 'preset', args: { agentId: 'lead', revision: 7, choice: 'x', extra: true } }));
-  assert.equal((await gateway.invoke({ namespace: 'teamSettings', method: 'preset', args: { agentId: 'lead', revision: -1, choice: 'x' } })).kind, 'error');
+  await assert.rejects(gateway.invoke({ peer, namespace: 'teamSettings', method: 'preset', args: { agentId: 'absent', revision: 7, choice: 'x' } }));
+  await assert.rejects(gateway.invoke({ peer, namespace: 'teamSettings', method: 'preset', args: { agentId: 'lead', revision: 7, choice: 'x', extra: true } }));
+  assert.equal((await gateway.invoke({ peer, namespace: 'teamSettings', method: 'preset', args: { agentId: 'lead', revision: -1, choice: 'x' } })).kind, 'error');
   await client.plugin(TypertRegistry);
   await client.plugin({ name: 'test-rpc-carrier', apply(ctx) {
     ctx.provide('connection', { start: () => ({ stop() {} }), registerGenerationSource: () => () => {},
       rpc: { open() { throw new Error('streams are not used'); }, async call(prefix, endpoint, payload, signal) {
         assert.equal(prefix, '/api'); const [namespace, method] = endpoint.split('/');
-        return { ok: true, value: await gateway.invoke({ namespace, method, args: payload.args, signal }) };
+        return { ok: true, value: await gateway.invoke({ peer, namespace, method, args: payload.args, signal }) };
       } },
     });
   } });
@@ -49,5 +53,5 @@ test('real public Gateway mounts plugin RPC without a Host slash command or nati
   await stop();
   assert.equal(remote.preset, undefined, 'withdrawn namespace exposes no callable save method');
   await owner.dispose();
-  await assert.rejects(gateway.invoke({ namespace: 'teamSettings', method: 'preset', args: { agentId: 'lead', revision: 8, choice: null } }));
+  await assert.rejects(gateway.invoke({ peer, namespace: 'teamSettings', method: 'preset', args: { agentId: 'lead', revision: 8, choice: null } }));
 });

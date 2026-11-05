@@ -28,6 +28,7 @@ import {
 import type { CommandPlan, LlmLike, Pin, Scope } from './pin.ts';
 import type { Context, Volatile } from '@deepseek-ai/cordis';
 import { installTeamModelSync } from './selection-sync.ts';
+import type { SyncAgent } from './selection-sync.ts';
 import { resolvePresetPolicy } from './preset-policy.ts';
 import { createPresetCommand } from './preset-command.ts';
 import { installTeamSettingsRpc } from './team-settings-rpc.ts';
@@ -59,6 +60,8 @@ interface AgentLike {
   ctx?: Context;
   session?: { requestHeader(): { config: LlmCallConfigLike } | undefined };
   options?: Partial<LlmCallConfigLike>;
+  /** DSH 0.2.2+ Agent-owned model selection; absent on older structural drivers. */
+  model?: SyncAgent['model'];
 }
 
 /** `ctx.agentTeams.tryMembership` 的返回值（SPEC 3）。 */
@@ -634,6 +637,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
           } catch (error) {
             return { kind: 'error', text: `写入运行期钉失败：${errorText(error)}` };
           }
+          refreshModelSync();
           return {
             kind: 'success',
             text: [
@@ -649,6 +653,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
         } catch (error) {
           return { kind: 'error', text: `清除运行期钉失败：${errorText(error)}` };
         }
+        refreshModelSync();
         const baseline = sessionKeyPin(sessionId, false);
         return {
           kind: 'success',
@@ -661,6 +666,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
   };
 
   // Independent paths: model/effort writes and clear never erase the preset choice.
+  let refreshModelSync: () => void = () => {};
   const readPreset = (leadId: string) => resolvePresetPolicy(configValue(raw.presetDefault), configValue(raw.presetSessions), leadId);
   installTeamSettingsRpc(ctx, { model: modelCommand.handler, preset: createPresetCommand(ctx, entryId).handler });
   installTeamPresetRuntime(ctx as unknown as Context, readPreset);
@@ -674,7 +680,9 @@ export function apply(ctx: PluginCtx, config: unknown): void {
       const pin = effectivePin(sessionId, membership?.role);
       if (pin === undefined && membership?.role !== 'teammate') return undefined;
       const root = membership?.role === 'teammate' ? membership.root : undefined;
-      const leader = root?.session?.requestHeader()?.config ?? root?.options;
+      // Prefer the Lead's next recorded selection (pending choice), then the
+      // last persisted request header, then its construction options.
+      const leader = root?.model?.current?.() ?? root?.session?.requestHeader()?.config ?? root?.options;
       return {
         sessionId,
         ...(membership?.role === undefined ? {} : { role: membership.role }),
@@ -689,12 +697,18 @@ export function apply(ctx: PluginCtx, config: unknown): void {
     audit({ at: new Date().toISOString(), sessionId: policy.sessionId, agentId: agent.id,
       role: policy.role, from: routeOf(from), to: routeOf(to) });
   });
+  refreshModelSync = synchronized.refresh;
 
   ctx.on('agent/request', async ({ agent }, next) => {
     if (synchronized.has(agent)) return next();
     // Older/nonstandard drivers without an Agent-scoped Context keep their
     // request-only contract; the standard Loop is owned by the selector above.
     const config = await next();
+    // DSH 0.2.2's standard Loop fixes provider/model/effort at step
+    // preparation and rejects any later `agent/request` change. An Agent that
+    // owns the new Model API is therefore handled only by model selection;
+    // never rewrite its request config here.
+    if (agent.model !== undefined) return config;
     let membership: MembershipLike | undefined;
     let sessionId = agent.id;
     let pin: Pin | undefined;

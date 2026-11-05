@@ -93,7 +93,7 @@ const en: typeof zh = {
 
 export const name = `agent-team-model-pin-ui-${CLIENT_VERSION}`;
 // Native directory creation and settings each need their qualified RPC service.
-export const inject = ['commandUi', 'inputTriggers', 'locale', 'modelDirectories', 'sessions', 'remote', 'remote.session', 'remote.settings'];
+export const inject = ['commandUi', 'inputTriggers', 'locale', 'modelDirectories', 'sessions', 'remote', 'remote.settings'];
 
 /** Register native popup policies without installing a component or stylesheet. */
 export function apply(ctx: ClientContext): void {

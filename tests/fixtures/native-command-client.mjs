@@ -30,7 +30,7 @@ export function closeDom() { dom.window.close(); }
 // CSS/markdown initializers; never replace the real fuzzy ranking with a mock.
 let rankByName;
 if (installation) {
-  const code = await readFile(join(installation, 'node_modules/@deepseek-ai/dsh-client-ui-primitives/lib/index.js'), 'utf8');
+  const code = await readFile(require.resolve('@deepseek-ai/dsh-client-ui-primitives'), 'utf8');
   const region = code.match(/\/\/#region lib\/types\/rank-by-name\.js\n([\s\S]*?)\/\/#endregion/);
   assert.ok(region, 'the native ranking module must remain identifiable; update this test boundary if DSH changes its bundle layout');
   rankByName = runInNewContext(`${region[1]}\nrankByName;`);
@@ -40,7 +40,13 @@ const primitives = {
   rankByName,
   IconDataOutlineRegular: icon, IconChevronDownOutlineRegular: icon, IconChevronRightOutlineRegular: icon,
   IconChevronLeftOutlineRegular: icon, IconCheckOutlineRegular: icon, IconWarningOutlineRegular: icon,
-  IconCloseFillRegular: icon, StateDot: icon,
+  IconCloseFillRegular: icon, IconCompactOutlineRegular: icon, IconDownloadOutlineRegular: icon,
+  IconGoalOutlineRegular: icon, IconPaperPlaneOutlineRegular: icon, IconPlanOutlineRegular: icon,
+  PermissionIconFullAccessRegular: icon, StateDot: icon,
+  Tag: ({ children, ...props }) => h('span', props, children),
+  RiskConfirmation: ({ title, description }) => h('div', { role: 'dialog' }, title, description),
+  isMobileDevice: () => false,
+  useAnchoredPosition: () => ({}),
   Toast: ({ message }) => h('div', { role: 'status' }, message),
   MenuSurface: React.forwardRef((props, ref) => h('div', { ...props, ref })),
   MenuGroup: ({ label, children }) => h('section', null, h('h3', null, label), children),

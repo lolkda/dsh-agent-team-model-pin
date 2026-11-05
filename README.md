@@ -4,6 +4,13 @@ DSH Agent Team 模型选择插件。**1.4.0 起通过原生 `/team-model` 和 `/
 
 源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。
 
+## 1.6.0：适配 DSH 0.2.2 的原生模型选择
+
+- **模型钉改用 DSH 0.2.2 的 Agent 原生接口。** DSH 0.2.2 用 `agent.model.current()` / `agent.model.select()` 取代了 `installModelSelection(ctx, ModelSelectionRef)`；`agent/request` 瀑布只允许调整控制字段，修改 provider / model / reasoningEffort 会在请求前被 DSH 拒绝。插件现在在 `agent/inbox/claimed`（标准 Loop 在捕获本步 `modelSelection` 之前发出）和 `agent/status = running` 时写入下一条选择，重试仍复用本步已捕获的路由。
+- **预设功能不再需要宿主补丁。** 当前部署的 DSH 0.2.2-rc.1 已原生提供 `subagents.childSetupVersion = 1` / `registerChildSetup()`；插件仍按实际能力检测，在未提供该接口的宿主上继续对具体预设 fail-closed，不静默换预设。`patches/` 保留为旧版本历史工件，不再是 0.2.2 的前置条件。
+- 开发与集成 SDK 升级到 `0.2.2-rc.1`（Cordis 4.1）；测试覆盖真实 AgentLoop 请求、真实 Team 创建/冷恢复、真实 DSH Web 进程重启与模型钉恢复。
+- `/team-model`、`/team-effort`、`/team-preset` 的交互和配置格式不变，已有配置与已保存选择无需迁移。升级后仍需重启 DSH 并刷新页面，确保 Host 与 Client 同版。
+
 ## 1.5.1：修复版
 
 - 修复 `/team-preset` 在未应用宿主补丁时连「跟随主 Agent」都无法保存的问题。显式 null 是原版子会话的既有行为，现在未扩展宿主也可保存；选择具体预设仍按安全边界要求 `childSetupVersion=1`。
@@ -118,13 +125,13 @@ npm ci
 npm run check
 ```
 
-本适配版应先构建并 `npm pack --ignore-scripts`，再通过插件管理器安装生成的 `.tgz` 绝对路径；不要直接链接带有开发版 SDK 的工作区。下面的旧目录式示例仅作历史记录：
+本适配版应先构建并 `npm pack --ignore-scripts`，再通过插件管理器安装生成的 `.tgz` 绝对路径；不要直接链接带有开发版 SDK 的工作区：
 
 ```text
-plugin_manager action=install_bundle target=/app/project/dsh-files/dsh-agent-team-model-pin
+plugin_manager action=install_bundle target=/app/project/dsh-agent-team-model-pin/lolkda-dsh-agent-team-model-pin-1.6.0.tgz
 ```
 
-安装影响当前 profile 的所有会话，Team 配置则按会话隔离。Web UI 需要 DSH 原生命令 UI（含 `decorate` / `popupSelect`）、模型目录及 Agent Teams 功能；开发与集成测试使用 `0.2.0-rc.2`。
+安装影响当前 profile 的所有会话，Team 配置则按会话隔离。Web UI 需要 DSH 原生命令 UI（含 `decorate` / `popupSelect`）、模型目录及 Agent Teams 功能；开发与集成测试使用 `0.2.2-rc.1`。
 
 **升级必须区分保存与激活**：
 

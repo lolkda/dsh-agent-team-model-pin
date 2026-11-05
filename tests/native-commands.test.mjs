@@ -256,7 +256,7 @@ test('native commands: native single-flight blocks duplicate writes and permits 
   assert.equal(state(ui).open, false);
 });
 
-for (const namespace of ['remote.session', 'remote.settings']) {
+for (const namespace of ['remote.settings']) {
   test(`native commands: missing ${namespace} is visible without replacing the native model control`, integration, async (t) => {
     const ui = await mount(t, { omitNamespace: namespace });
     // The visible native picker already warmed A's directory. Open B's command

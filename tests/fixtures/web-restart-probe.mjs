@@ -73,6 +73,7 @@ try {
     assert.equal(await realpath(resolved.dir), expected, `${packageId} must remain deployment-owned`);
     coreModules[packageId] = expected;
   }
+  const peer = ctx.get('connection').createPeer({ principal: { kind: 'owner' }, interactions: 'none' });
   const baseUrl = `http://127.0.0.1:${ctx.get('webServer').port}`;
   let page = await fetch(ctx.get('connection').authenticatedUrl(baseUrl), { redirect: 'manual', signal: AbortSignal.timeout(5000) });
   if (page.headers.has('location')) {
@@ -125,17 +126,17 @@ try {
     // No Host slash row should collide with the localized client contribution.
     assert.equal(ctx.get('commands').find(primary, 'team-model'), undefined);
     assert.equal(ctx.get('commands').find(primary, 'team-preset'), undefined);
-    const executed = await ctx.get('typertGateway').invoke({ namespace: 'teamSettings', method: 'model',
+    const executed = await ctx.get('typertGateway').invoke({ peer, namespace: 'teamSettings', method: 'model',
       args: { agentId: primary.id, rawInput: `${provider} team-pinned` }, signal: AbortSignal.timeout(5000) });
     assert.equal(executed.kind, 'success', JSON.stringify(executed));
-    const committed = entry.fiber.config.sessions.get()[primaryId];
+    const committed = entry.fiber.effectiveConfig.sessions.get()[primaryId];
     assert.equal(committed?.model, 'team-pinned', 'the command must commit the pin into the live entry config');
   } else {
     restoredMessages = primary.session.deriveMessages().filter((message) => message.role === 'assistant').length;
     assert.equal(restoredMessages, 2, 'two first-process responses must survive actual disk resume');
     // DSH 0.1.7-rc.1 removed `settings.get(ns)`; the pin is read from the
     // plugin's own live entry config, which is exactly what the Host applies.
-    const pinned = entry.fiber.config.sessions.get()[primaryId];
+    const pinned = entry.fiber.effectiveConfig.sessions.get()[primaryId];
     assert.equal(pinned?.model, 'team-pinned', 'the per-session pin must survive a new DSH process');
   }
   stage = 'conversation';

@@ -47,9 +47,9 @@ async function harness(t, composition = { scope: 'teammates', defaults: {}, sess
       const raw = structuredClone(target.options.config ?? {});
       const next = change(raw, structuredClone(composition));
       for (const [key, value] of Object.entries(next)) {
-        const field = target.fiber.config[key];
+        const field = target.fiber.effectiveConfig[key];
         if (field !== null && typeof field === 'object' && VOLATILE_WRITE in field) field[VOLATILE_WRITE](value);
-        else target.fiber.config[key] = value;
+        else target.fiber.effectiveConfig[key] = value;
       }
       target.options.config = next;
       override = next;
@@ -67,7 +67,7 @@ async function harness(t, composition = { scope: 'teammates', defaults: {}, sess
   t.after(async () => { await settings.dispose(); await root.fiber.dispose(); await rm(home, { recursive: true, force: true }); });
   return {
     service: root.get('settings'), entry, fiber, edits,
-    live: () => fiber.config.sessions.get(),
+    live: () => fiber.effectiveConfig.sessions.get(),
   };
 }
 
@@ -85,9 +85,9 @@ test('rc.1 settings: the exported Config makes the entry describable and writabl
 
 test('rc.1 settings: a path write reaches the live plugin config without a remount', async (t) => {
   const h = await harness(t);
-  const before = h.fiber.config.sessions;
+  const before = h.fiber.effectiveConfig.sessions;
   await h.service.mutate(NS, [{ op: 'set', path: ['sessions', 'lead-A'], value: { provider: 'p', model: 'm', modelDefault: true } }]);
-  assert.equal(h.fiber.config.sessions, before, 'volatile 提交必须就地更新，不得换掉引用（不重挂）');
+  assert.equal(h.fiber.effectiveConfig.sessions, before, 'volatile 提交必须就地更新，不得换掉引用（不重挂）');
   assert.deepEqual(h.live()['lead-A'], { provider: 'p', model: 'm', modelDefault: true });
   assert.equal(h.fiber.state, 2, '插件不得被重启');
 });
@@ -128,9 +128,9 @@ test('rc.1 settings: non-volatile configuration is not writable from the setting
 
 test('preset settings: nullable policy is live and independent of model set/clear paths', async (t) => {
   const h = await harness(t, { scope: 'teammates', defaults: {}, sessions: {}, presetDefault: 'coder', presetSessions: {} });
-  const ref = h.fiber.config.presetSessions;
+  const ref = h.fiber.effectiveConfig.presetSessions;
   await h.service.mutate(NS, [{ op: 'set', path: ['presetSessions', 'lead-A'], value: null }]);
-  assert.equal(h.fiber.config.presetSessions, ref);
+  assert.equal(h.fiber.effectiveConfig.presetSessions, ref);
   assert.deepEqual(ref.get(), { 'lead-A': null });
   await h.service.mutate(NS, [{ op: 'set', path: ['sessions', 'lead-A'], value: { provider: 'p', model: 'm' } }]);
   await h.service.mutate(NS, [{ op: 'unset', path: ['sessions', 'lead-A'] }]);
@@ -139,5 +139,5 @@ test('preset settings: nullable policy is live and independent of model set/clea
   assert.deepEqual(ref.get(), { 'lead-A': 'reviewer' });
   await h.service.mutate(NS, [{ op: 'unset', path: ['presetSessions', 'lead-A'] }]);
   assert.deepEqual(ref.get(), {});
-  assert.equal(h.fiber.config.presetDefault.get(), 'coder');
+  assert.equal(h.fiber.effectiveConfig.presetDefault.get(), 'coder');
 });

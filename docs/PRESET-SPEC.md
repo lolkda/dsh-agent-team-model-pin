@@ -1,5 +1,7 @@
 # Team 创建时预设选择 · 1.5.0-rc.1
 
+> 1.6.0 适配注：当前部署的 DSH 0.2.2-rc.1 已在 `@deepseek-ai/dsh-subagent` 提供 `childSetupVersion = 1` / `registerChildSetup()`，因此预设功能不再需要 `patches/` 下的宿主补丁；旧版本仍按能力检测 fail-closed。
+
 ## 确认的产品目标
 
 - 每个 Lead 会话一条未来队友创建策略，不提供每个队友独立 UI、不提供热切换。

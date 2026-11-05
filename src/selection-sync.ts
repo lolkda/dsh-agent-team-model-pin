@@ -1,12 +1,27 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
-import { installModelSelection } from '@deepseek-ai/dsh-agent';
-import type { ModelSelection, ModelSelectionRef, PreStepDecision } from '@deepseek-ai/dsh-agent';
 import type { Context } from '@deepseek-ai/cordis';
-import type { LlmCallConfig } from '@deepseek-ai/dsh-llm';
-import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt';
+import { installModelSelection } from '@deepseek-ai/dsh-agent';
 import { applyTeamPin } from './pin.ts';
 import type { Pin } from './pin.ts';
 
+/**
+ * The route shape this plugin reads from an Agent and hands to `agent.model`.
+ *
+ * DSH 0.2.2 replaced the mutable `ModelSelectionRef` argument of
+ * `installModelSelection()` with the Agent-owned `Model` API:
+ *
+ * - `agent.model.current()` returns the pending choice, then the latest
+ *   request's choice, then the Agent's live options;
+ * - `agent.model.select(route)` records the complete selection for the next
+ *   step whose preparation has not begun.
+ *
+ * The plugin must therefore choose a route *before* the Loop captures its
+ * step selection. `agent/inbox/claimed` is emitted synchronously by the
+ * standard Loop before `model.current()`, and `agent/status = running` is
+ * emitted before the first turn starts. Both are safe places to call
+ * `select()`. The deprecated `agent/request` waterfall must not change the
+ * provider/model/effort anymore: DSH 0.2.2 rejects a replacement that differs
+ * from the selection fixed at step preparation.
+ */
 export interface SyncRoute {
   provider: string;
   model: string;
@@ -15,197 +30,165 @@ export interface SyncRoute {
   maxTokens?: number;
   stop?: string[];
 }
+
 export interface SyncAgent {
   id: string;
   ctx?: Context;
   options?: Partial<SyncRoute>;
   session?: { requestHeader(): { config: SyncRoute; adapterDefaults?: { reasoningEffort?: true } } | undefined };
+  model?: {
+    current(): Readonly<SyncRoute> | undefined;
+    select(selection: Readonly<SyncRoute>): void;
+  };
 }
+
 export interface SyncPolicy {
   sessionId: string;
   role?: 'lead' | 'teammate';
   pin?: Pin;
   leader?: Pin;
 }
-export interface SyncAudit { agent: SyncAgent; policy: SyncPolicy; from: SyncRoute; to: SyncRoute }
-interface Frame {
-  policy: SyncPolicy | undefined;
-  selected: ModelSelection | undefined;
-  assembled: ModelSelection | undefined;
-}
-interface Admission { turn: number; step: number; frame: Frame }
-type Listener = (...args: unknown[]) => unknown;
 
-function effective(policy: SyncPolicy | undefined): policy is SyncPolicy {
-  if (!policy) return false;
-  const pin = policy.pin;
-  return pin?.provider !== undefined || pin?.model !== undefined || pin?.reasoningEffort !== undefined || pin?.modelDefault === true
-    || ((!pin || pin.followLeader === true) && !!policy.leader?.provider && !!policy.leader.model);
+export interface SyncAudit {
+  agent: SyncAgent;
+  policy: SyncPolicy;
+  from: SyncRoute;
+  to: SyncRoute;
 }
-function selectionOf(route: SyncRoute): ModelSelection {
-  if (!route.provider || !route.model) throw new Error('agent-team-model-pin: 无法在组装时确定完整模型选择');
-  return Object.freeze({ provider: route.provider, model: route.model,
-    ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort as NonNullable<ModelSelection['reasoningEffort']> }) });
+
+interface Binding {
+  dispose(): void;
 }
+
+type Logger = { warn(format: unknown, ...params: unknown[]): void };
+
+function routeOf(route: Partial<SyncRoute> | undefined): SyncRoute | undefined {
+  if (!route || typeof route.provider !== 'string' || typeof route.model !== 'string'
+    || route.provider.length === 0 || route.model.length === 0) return undefined;
+  return {
+    provider: route.provider,
+    model: route.model,
+    ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
+  };
+}
+
+function sameRoute(left: SyncRoute | undefined, right: SyncRoute): boolean {
+  return left !== undefined && left.provider === right.provider && left.model === right.model
+    && left.reasoningEffort === right.reasoningEffort;
+}
+
 /**
- * Whether one message is the official durable model-switch notice.
+ * Install the Team model policy on every live and future Agent.
  *
- * `installModelSelection` tags its notice through the `MessageSourceMap`
- * declaration of `@deepseek-ai/dsh-agent`: DSH 0.1.7-rc.1 uses the standalone
- * `'model-selection'` kind, while 0.1.6-alpha.2 nested it as
- * `kind: 'plugin', plugin: 'model-selection'`. Both are recognized so the
- * superseded-notice filter survives the source-shape change.
- */
-function isModelNotice(source: unknown): boolean {
-  if (!source || typeof source !== 'object') return false;
-  const value = source as Record<string, unknown>;
-  if (value.form !== 'notice') return false;
-  return value.kind === 'model-selection'
-    || (value.kind === 'plugin' && value.plugin === 'model-selection');
-}
-
-/**
- * Use the public selector, adapting only its event boundary and selection source.
- * Frames are assembly-local; admitted requests refer to their exact turn/step.
- * Preview calls cannot overwrite a running step's selection or audit policy.
+ * The policy is captured live on each step boundary instead of being frozen
+ * with an AsyncLocalStorage frame. That matches DSH 0.2.2's durable
+ * `model/selection` projection: the next step reads the recorded choice, and a
+ * setting change while an Agent is idle is visible on its next step without a
+ * remount. Retries reuse the step's captured selection by design; the Loop
+ * keeps `modelSelection` fixed across retries.
+ *
+ * @param host Profile-level Cordis context.
+ * @param capture Per-Agent policy resolver (membership, pin, Lead route).
+ * @param audit Audit recorder for actual route rewrites.
+ * @returns Live membership test and an explicit refresh after a settings write.
  */
 export function installTeamModelSync(
   host: Context,
   capture: (agent: SyncAgent) => SyncPolicy | undefined,
   audit: (record: SyncAudit) => void,
-): { has(agent: SyncAgent): boolean } {
-  const bindings = new Map<SyncAgent, { dispose(): void; headerObserved: boolean }>();
-  const attach = (agent: SyncAgent, created = false): void => {
-    if (!agent.ctx || bindings.has(agent)) return;
-    const scoped = agent.ctx;
-    const frames = new AsyncLocalStorage<Frame>();
-    const pending = new WeakMap<AbortSignal, Frame>();
-    const admitted = new WeakMap<AbortSignal, Admission>();
-    const state = { dispose: () => {}, headerObserved: !created && agent.session?.requestHeader() !== undefined };
-    let refreshNotice: (() => void) | undefined;
-    let disposed = false;
-    const ref: ModelSelectionRef = {
-      get current() { return frames.getStore()?.selected; },
-      get assembled() { return frames.getStore()?.assembled; },
-      set assembled(value) {
-        const frame = frames.getStore();
-        if (!frame) throw new Error('agent-team-model-pin: selector outside its assembly/request frame');
-        frame.assembled = value;
-      },
-    };
-    const seed = (): SyncRoute => {
-      const header = agent.session?.requestHeader();
-      if (state.headerObserved && header) {
-        const value = { ...header.config };
-        if (header.adapterDefaults?.reasoningEffort === true) delete value.reasoningEffort;
-        return value;
-      }
-      const options = agent.options;
-      const sameRoute = header?.config.provider === options?.provider && header?.config.model === options?.model;
-      const persistedEffort = sameRoute && header?.adapterDefaults?.reasoningEffort !== true ? header?.config.reasoningEffort : undefined;
-      const effort = options?.reasoningEffort ?? persistedEffort;
-      return { provider: options?.provider ?? '', model: options?.model ?? '', ...(effort === undefined ? {} : { reasoningEffort: effort }) };
-    };
-    const selectorContext = new Proxy(scoped, {
-      get(target, key) {
-        if (key !== 'on') return Reflect.get(target, key, target);
-        return (event: string, listener: Listener, options?: { prepend?: boolean }) => {
-          if (event === 'system-prompt/assemble') {
-            return target.on(event, async (assembly, context, next) => {
-              const policy = capture(agent);
-              const frame: Frame = { policy, selected: undefined, assembled: undefined };
-              const base = seed();
-              const active = effective(policy);
-              if (active) {
-                // Supply the Loop's proposal as the baseline BEFORE ordinary
-                // selectors. Their pending selection can still replace it.
-                const provisional = applyTeamPin(base, policy.pin, policy.leader);
-                assembly.variables = { ...assembly.variables,
-                  provider: base.provider || provisional.provider,
-                  model: base.model || provisional.model };
-              }
-              const assembled = await next();
-              if (disposed) throw new Error('agent-team-model-pin: selection owner disposed during assembly');
-              if (active) {
-                const selectedBase = { ...base,
-                  provider: assembled.variables.provider ?? base.provider,
-                  model: assembled.variables.model ?? base.model };
-                frame.selected = selectionOf(applyTeamPin(selectedBase, policy.pin, policy.leader));
-              }
-              // Let the official implementation interpolate the resolved pair
-              // and capture it; do not recreate its request/notice algorithms.
-              const out = await frames.run(frame, () => listener(assembled, context, () => Promise.resolve(assembled))) as PromptAssembly;
-              if (context.signal) {
-                pending.set(context.signal, frame);
-                // A native picker may have been installed since our binding.
-                // Put the final-notice filter outside all current selectors.
-                refreshNotice?.();
-              }
-              return out;
-            }, { ...options, prepend: true });
-          }
-          if (event === 'agent/pre-step') {
-            const register = () => target.on(event, async (payload, next) => {
-              const frame = pending.get(payload.signal);
-              if (frame) admitted.set(payload.signal, { turn: payload.turn, step: payload.step, frame });
-              let decision = await next();
-              if (!frame) return decision;
-              if (frame.selected && decision.kind === 'enter') {
-                // Only discard newly produced native model notices superseded
-                // by Team policy. Preserve the original input and all history.
-                const originals = new Set(payload.messages.map((message) => message.id));
-                decision = { ...decision, messages: decision.messages.filter((message) => originals.has(message.id) || !isModelNotice(message.source)) };
-              }
-              const out = await frames.run(frame, () => listener(payload, () => Promise.resolve(decision))) as PreStepDecision;
-              if (out.kind === 'reject') admitted.delete(payload.signal);
-              return out;
-            }, { ...options, prepend: true });
-            let stop = register();
-            refreshNotice = () => { stop(); stop = register(); };
-            return () => { refreshNotice = undefined; stop(); };
-          }
-          if (event === 'agent/request') {
-            return target.on(event, async (payload, next) => {
-              const entry = admitted.get(payload.signal);
-              if (!entry || entry.turn !== payload.turn || entry.step !== payload.step) {
-                throw new Error('agent-team-model-pin: request has no admitted model-selection snapshot; 请重新组装提示词');
-              }
-              const frame = entry.frame;
-              const from = await next();
-              if (disposed) throw new Error('agent-team-model-pin: selection owner disposed during request');
-              const to = await frames.run(frame, () => listener(payload, () => Promise.resolve(from))) as LlmCallConfig;
-              if (frame.selected && frame.policy) {
-                const expected = applyTeamPin(from, frame.policy.pin, frame.policy.leader);
-                if (to.provider !== expected.provider || to.model !== expected.model || to.reasoningEffort !== expected.reasoningEffort) {
-                  throw new Error('agent-team-model-pin: model selection conflict，组装后的模型路由发生变化；请让选路参与提示词组装');
-                }
-              }
-              if (frame.policy && (frame.selected || frame.policy.pin)) audit({ agent, policy: frame.policy, from, to });
-              return to;
-            }, { ...options, prepend: true });
-          }
-          return Reflect.apply(target.on, target, [event, listener, options]);
-        };
+): { has(agent: SyncAgent): boolean; refresh(): void } {
+  const bindings = new Map<SyncAgent, Binding>();
+  const logger = (host as unknown as { logger?: Logger }).logger;
+  const warned = new Set<string>();
+  const warnOnce = (key: string, message: string): void => {
+    if (warned.has(key)) return;
+    warned.add(key);
+    logger?.warn(message);
+  };
+  let disposed = false;
+
+  const apply = (agent: SyncAgent): void => {
+    if (disposed || !agent.model || typeof agent.model.select !== 'function') return;
+    let policy: SyncPolicy | undefined;
+    try {
+      policy = capture(agent);
+    } catch (error) {
+      warnOnce('capture', `agent-team-model-pin: 团队成员判定失败，本次不改写：${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (!policy) return;
+    if (policy.pin === undefined && policy.role !== 'teammate') return;
+    const current = routeOf(agent.model.current?.());
+    const fallback = routeOf(agent.options);
+    const base = current ?? fallback;
+    if (base === undefined) {
+      warnOnce('route', 'agent-team-model-pin: Agent 尚无完整 provider/model，无法写入 Team 模型选择');
+      return;
+    }
+    let desired: SyncRoute;
+    try {
+      desired = routeOf(applyTeamPin(base, policy.pin, policy.leader)) as SyncRoute;
+    } catch (error) {
+      warnOnce('apply', `agent-team-model-pin: 钉应用失败，本次不改写：${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (!desired) return;
+    try {
+      agent.model.select(desired);
+    } catch (error) {
+      warnOnce('select', `agent-team-model-pin: 写入模型选择失败，本次不改写：${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    if (!sameRoute(base, desired)) {
+      audit({ agent, policy, from: base, to: desired });
+    }
+  };
+
+  const attach = (agent: SyncAgent): void => {
+    if (disposed || !agent.ctx || !agent.model || bindings.has(agent)) return;
+    const applyNow = (): void => apply(agent);
+    const stopStatus = agent.ctx.on('agent/status', (payload: { status?: string }) => {
+      if (payload?.status === 'running') applyNow();
+    }, { prepend: true });
+    const stopClaim = agent.ctx.on('agent/inbox/claimed', () => { applyNow(); }, { prepend: true });
+    let stopNotice: (() => void) | undefined;
+    try {
+      // Team children are created by the subagent manager, not by the Web
+      // session controller, so they do not get the native model-switch notice
+      // owner automatically. Install the official notice listener for Team
+      // teammates only; ordinary sessions already have one.
+      if (capture(agent)?.role === 'teammate') stopNotice = installModelSelection(agent.ctx);
+    } catch {
+      // Membership is optional at agent/created; a later status/claim pass
+      // still applies the policy even if this early notice check cannot resolve.
+    }
+    bindings.set(agent, {
+      dispose() {
+        stopStatus();
+        stopClaim();
+        stopNotice?.();
       },
     });
-    const dispose = installModelSelection(selectorContext, ref);
-    state.dispose = () => { disposed = true; dispose(); };
-    bindings.set(agent, state);
   };
-  host.on('agent/created', ({ agent }) => { attach(agent, true); });
+
+  host.on('agent/created', ({ agent }) => { attach(agent as SyncAgent); });
   host.on('agent/disposed', ({ agent }) => {
-    bindings.get(agent)?.dispose();
-    bindings.delete(agent);
+    const binding = bindings.get(agent as SyncAgent);
+    if (binding === undefined) return;
+    binding.dispose();
+    bindings.delete(agent as SyncAgent);
   });
-  host.on('session/event', (session, event) => {
-    if (event.type !== 'request/header') return;
-    for (const [agent, state] of bindings) if (agent.session === session) state.headerObserved = true;
-  });
-  const registry = host.get('agents');
+  const registry = host.get('agents') as { list(): SyncAgent[] } | undefined;
   if (registry) for (const agent of registry.list()) attach(agent);
+
   host.effect(() => () => {
-    for (const state of bindings.values()) state.dispose();
+    disposed = true;
+    for (const binding of bindings.values()) binding.dispose();
     bindings.clear();
   });
-  return { has: (agent) => bindings.has(agent) };
+
+  return {
+    has: agent => bindings.has(agent),
+    refresh: () => { for (const agent of bindings.keys()) apply(agent); },
+  };
 }
