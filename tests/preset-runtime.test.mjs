@@ -33,13 +33,7 @@ const presetOf = (h, agent) => h.root.get('agentPresets').composedPreset(agent.c
 
 async function harness(t, requested = 'beta', fullPlugin = false) {
   const home = await mkdtemp(join(tmpdir(), 'atmp-preset-team-'));
-  let extended;
-  try {
-    extended = await loadPatchedSubagent();
-  } catch (error) {
-    t.skip(`Deployment DSH does not expose childSetupVersion: ${error instanceof Error ? error.message : String(error)}`);
-    return;
-  }
+  const extended = await loadPatchedSubagent();
   const root = new Context();
   const handles = [];
   t.after(async () => {

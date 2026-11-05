@@ -1,6 +1,6 @@
 # DSH continuable child setup v1 — 宿主扩展候选
 
-**这不是原版 DSH 已提供的接口，也不是自动安装脚本。** 插件 1.5.0-rc.1 的新建队友预设选择需要本扩展或语义等效的宿主升级；未扩展的宿主会拒绝预设保存，已有模型功能不受影响。
+**这不是自动安装脚本。** 当前部署的 DSH 0.2.2-rc.1 已原生提供该接口，1.6.0 不再需要本补丁；但 npm 上发布的 `@deepseek-ai/dsh-subagent@0.2.2-rc.1` 仍缺少该接口，本补丁保留为旧/上游包的候选扩展。未扩展的宿主会拒绝具体预设保存，已有模型功能不受影响。
 
 ## 为什么不在 agent/created 中修改
 
@@ -8,7 +8,7 @@ Cordis 在调用第一个 `agent/created` 监听器前就已按旧 scope 筛选�
 
 ## 补丁内容和边界
 
-- 基线：`@deepseek-ai/dsh-subagent@0.2.0-rc.2` 的 npm 包。`dsh-subagent-child-setup-v1.baseline.json` 记录每个修改文件的修改前/后 SHA-256。
+- 基线：`@deepseek-ai/dsh-subagent@0.2.2-rc.1` 的 npm 包。`dsh-subagent-child-setup-v1.baseline.json` 记录每个修改文件的修改前/后 SHA-256。
 - 公开 `subagents.childSetupVersion === 1`、`registerChildSetup(callback)`。
 - 回调接收 `{childCtx, child, parent, source, signal}`，在原生 delegation composition 之后、发布之前 awaited 执行。可返回同步 `{commit()}`，保留取消和 owner 卸载的最终验证。
 - 不替换 Agent factory，不重新派发 `agent/created`，不修改运行中的服务方法，不修改权限记录。
@@ -48,4 +48,4 @@ node --test tests/preset-host-extension.test.mjs tests/preset-runtime.test.mjs
 npm run check
 ```
 
-补丁同时覆盖 bundle、模块化 JS 和类型声明。测试包括真实 Cordis/Loader/PresetRegistry/AgentLoop/Agent Teams/JSONL 持久化路径；模型 IO 为可取消的捕获边界，不调用付费模型。
+补丁同时覆盖运行时 `lib/index.js` 和公开类型声明。测试包括真实 Cordis/Loader/PresetRegistry/AgentLoop/Agent Teams/JSONL 持久化路径；模型 IO 为可取消的捕获边界，不调用付费模型。

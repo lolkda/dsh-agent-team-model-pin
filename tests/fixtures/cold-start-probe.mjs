@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { installedPackageFile } from './installed-package.mjs';
 
 const [installation, profileDir, withPlugin] = process.argv.slice(2);
-const fromInstall = (name) => import(pathToFileURL(join(installation, 'node_modules', name, 'lib/index.js')).href);
+const fromInstall = (name) => import(pathToFileURL(installedPackageFile(installation, name, 'lib/index.js')).href);
 const { boot, createRuntimeResolution, loadProfileDirectory, PluginPackages } = await fromInstall('@deepseek-ai/dsh-app-boot');
 const { createScope } = await fromInstall('@deepseek-ai/dsh-scope');
 const profile = loadProfileDirectory('atmp-cold-start', profileDir, join(installation, 'package.json'));

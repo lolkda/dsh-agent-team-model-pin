@@ -3,10 +3,11 @@ import { realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { installedPackageFile } from './installed-package.mjs';
 
 const [installation, profileDir, phase] = process.argv.slice(2);
 assert.ok(['create', 'resume'].includes(phase));
-const fromInstall = (name) => import(pathToFileURL(join(installation, 'node_modules', name, 'lib/index.js')).href);
+const fromInstall = (name) => import(pathToFileURL(installedPackageFile(installation, name, 'lib/index.js')).href);
 const { runProfile } = await import(pathToFileURL(join(installation, 'lib/profile-boot.js')).href);
 const { loadProfileDirectory } = await fromInstall('@deepseek-ai/dsh-app-boot');
 const { createLaunchEnvironmentSnapshot } = await fromInstall('@deepseek-ai/dsh-launch-environment');

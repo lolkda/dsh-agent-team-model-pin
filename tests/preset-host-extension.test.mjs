@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadPatchedSubagent } from './fixtures/preset-host-extension.mjs';
 
-test('deployment subagent exposes the childSetupVersion=1 pre-publication protocol', async (t) => {
+test('subagent exposes the childSetupVersion=1 pre-publication protocol', async (t) => {
   let fixture;
   try {
     fixture = await loadPatchedSubagent();

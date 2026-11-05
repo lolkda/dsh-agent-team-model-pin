@@ -11,6 +11,7 @@ import { Context, Service } from '@deepseek-ai/cordis';
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store';
 import { JSDOM } from 'jsdom';
 import { findDshInstallation } from './dsh-installation.mjs';
+import { installedPackageFile } from './installed-package.mjs';
 
 export const installation = await findDshInstallation();
 const require = createRequire(import.meta.url);
@@ -67,7 +68,7 @@ async function loadClient(path) {
   assert.ok(registration?.factory, `${path} must register a native browser factory`);
   return registration.factory((name) => name === '@deepseek-ai/dsh-client-ui-primitives' ? primitives : require(name));
 }
-const fromInstall = (name) => loadClient(join(installation, 'node_modules/@deepseek-ai', name, 'lib/client.js'));
+const fromInstall = (name) => loadClient(installedPackageFile(installation, `@deepseek-ai/${name}`, 'lib/client.js'));
 const commands = installation ? await fromInstall('dsh-client-ui-commands') : undefined;
 const native = installation ? await fromInstall('dsh-client-ui-model-selection') : undefined;
 const renderer = installation ? await fromInstall('dsh-client-ui-renderer') : undefined;
