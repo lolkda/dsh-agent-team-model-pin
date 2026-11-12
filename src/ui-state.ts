@@ -4,7 +4,7 @@ import type { Pin, Scope } from './pin.ts';
 
 export const SETTINGS_NS = 'agent-team-model-pin';
 /** Client registration marker; no custom DOM or CSS is installed. */
-export const CLIENT_VERSION = '1.8.0';
+export const CLIENT_VERSION = '1.8.1';
 export const choiceId = (...parts: (string | null)[]): string => JSON.stringify(parts);
 export interface Selection { provider: string; model: string; reasoningEffort?: string }
 export interface ModelInfo {
@@ -23,8 +23,13 @@ export interface SettingsRemote {
 export interface SessionFaceLike {
   getSnapshot(): { subagent?: { address?: { parentSessionId?: string } } } | undefined;
 }
+export interface SessionBindingLike {
+  session: SessionFaceLike;
+  /** Session-scope Context, present in the live DSH client. */
+  ctx?: unknown;
+}
 export interface SessionsLike {
-  binding(sessionId: string): { session: SessionFaceLike } | undefined;
+  binding(sessionId: string): SessionBindingLike | undefined;
 }
 
 /** Resolve a delegated session to the same durable Lead key as the native Team UI. */

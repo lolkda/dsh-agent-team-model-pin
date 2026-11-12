@@ -3,7 +3,7 @@ import { presetDisplayText } from '@deepseek-ai/dsh-agent-preset-registry/displa
 import { applyTeamPin } from './pin.ts';
 import { installPresetCommand } from './preset-client.ts';
 import type { PresetClientContext } from './preset-client.ts';
-import { TeamMenuController, TeamSettingsOverlay, TeamSettingsRows, teamMenuLocale } from './team-menu.tsx';
+import { TeamMenuController, TeamSettingsRows, teamMenuLocale } from './team-menu.tsx';
 import type { TeamMenuContext } from './team-menu-data.ts';
 import { TEAM_SETTINGS_REMOTE } from './team-settings-remote.ts';
 import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol';
@@ -52,6 +52,7 @@ interface ClientContext {
   commandUi: {
     register(command: CommandRegistration): () => void;
     dismiss(name: string): void;
+    popupFor?(ctx: unknown): { open(...args: unknown[]): void } | undefined;
   };
   inputTriggers: { registerSource(source: { trigger: '/'; name: string; showGroupTitle: false; candidates(): Promise<never[]>; onPick(): undefined; matchEnter(session: SessionContext, line: string, signal: AbortSignal): Promise<undefined> }): () => void };
   modelDirectories: { directoryFor(sessionId: string): Directory };
@@ -117,6 +118,8 @@ export function apply(ctx: ClientContext): void {
     follow: menuT('follow'), modelDefault: menuT('modelDefault'), unavailable: menuT('unavailable'),
     readOnly: menuT('readOnly'), missing: menuT('missing'), catalogUnavailable: menuT('catalogUnavailable'),
     saveUnavailable: menuT('saveUnavailable'), noModel: menuT('noModel'),
+    searchPreset: menuT('searchPreset'), searchModel: menuT('searchModel'), searchEffort: menuT('searchEffort'),
+    empty: menuT('empty'), noResults: menuT('noResults'),
   };
   const displayPreset = (row: Parameters<typeof presetDisplayText>[0]): string => presetDisplayText(row, key => {
     const native = nativePresetText(key);
@@ -155,7 +158,7 @@ export function apply(ctx: ClientContext): void {
     get agentPresets() { return menuAgentPresets; },
     get teamSettings() { return menuTeamSettings; },
   };
-  const menu = new TeamMenuController({ remote: menuRemote, sessions: ctx.sessions, modelDirectories: ctx.modelDirectories }, menuLabels, displayPreset);
+  const menu = new TeamMenuController({ remote: menuRemote, sessions: ctx.sessions, modelDirectories: ctx.modelDirectories, commandUi: ctx.commandUi }, menuLabels, displayPreset);
   ctx.inject?.(['slots'], child => {
     child.effect(() => {
       const slots = child.slots;
@@ -164,13 +167,8 @@ export function apply(ctx: ClientContext): void {
         name: 'conversation.input.model.options', id: 'agent-team-model-pin-settings', locale: 'agentTeamMenu',
         inject: () => ({ controller: menu }),
       }, TeamSettingsRows));
-      const offOverlay = slots.inject('shell.overlay', () => slots.register({
-        name: 'shell.overlay', id: 'agent-team-model-pin-settings', locale: 'agentTeamMenu',
-        inject: () => ({ controller: menu, hooks: { request: menu.requests } }),
-      }, TeamSettingsOverlay));
       return () => {
         if (typeof offRows === 'function') offRows();
-        if (typeof offOverlay === 'function') offOverlay();
       };
     });
   });

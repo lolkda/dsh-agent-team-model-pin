@@ -35,6 +35,7 @@ export interface TeamMenuOption {
   id: string;
   label: string;
   detail?: string;
+  group?: { name: string; label: string };
   active?: boolean;
   choice: TeamMenuChoice;
 }
@@ -62,6 +63,11 @@ export interface TeamMenuLabels {
   catalogUnavailable: string;
   saveUnavailable: string;
   noModel: string;
+  searchPreset: string;
+  searchModel: string;
+  searchEffort: string;
+  empty: string;
+  noResults: string;
 }
 
 export interface TeamDirectoryState {
@@ -89,6 +95,7 @@ export interface TeamMenuContext {
   };
   sessions: SessionsLike;
   modelDirectories: { directoryFor(sessionId: string): TeamDirectory };
+  commandUi?: { popupFor?(ctx: unknown): { open(...args: unknown[]): void } | undefined };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -211,6 +218,7 @@ export async function loadTeamMenuData(
       id: choiceId('menu-model', group.id, model.id),
       label: model.name,
       detail: `${group.name} · ${model.id}`,
+      group: { name: group.id, label: group.name },
       active: !follows && effective?.provider === group.id && effective.model === model.id,
       choice: { kind: 'model' as const, provider: group.id, model: model.id },
     }))),
@@ -232,6 +240,7 @@ export async function loadTeamMenuData(
       id: choiceId('menu-effort', effort.id),
       label: effort.name,
       detail: `${effortModel?.name ?? effective?.model ?? ''} · ${effort.id}`,
+      group: { name: effortModel?.id ?? 'effort', label: effortModel?.name ?? effective?.model ?? '' },
       active: !follows && pin?.modelDefault !== true && pin?.reasoningEffort === effort.id,
       choice: { kind: 'effort' as const, effort: effort.id },
     })),

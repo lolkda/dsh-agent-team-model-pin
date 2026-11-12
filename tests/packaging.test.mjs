@@ -31,15 +31,16 @@ test('packaging: the browser artifact registers the exact package module without
   assert.equal(typeof registration.factory, 'function');
 });
 
-test('packaging: model-menu rows use shared React and register the native slots', async () => {
+test('packaging: model-menu rows use shared React and the native model-options slot', async () => {
   assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-commands'));
-  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-primitives'));
-  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-layout'));
+  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-model-selection'));
+  assert.ok(!pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-primitives'));
+  assert.ok(!pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-layout'));
   const code = await readFile(new URL('../dist/client.js', import.meta.url), 'utf8');
   assert.match(code, /require\(["']react(?:-dom)?["']\)/);
   assert.match(code, /conversation\.input\.model\.options/);
-  assert.match(code, /shell\.overlay/);
-  assert.doesNotMatch(code, /atmp-trigger|data-atmp-pane/);
+  assert.match(code, /popupFor/);
+  assert.doesNotMatch(code, /shell\.overlay|atmp-trigger|data-atmp-pane/);
 });
 
 test('packaging: rebuilt dist contains no retired picker modules', async () => {
