@@ -1,8 +1,14 @@
 # dsh-agent-team-model-pin
 
-DSH Agent Team 模型选择插件。**1.8.2 起在根会话的模型与推理等级菜单中提供「Team 预设 / Team 模型 / Team 推理等级」三行配置，同时保留 `/team-preset`、`/team-model`、`/team-effort` 原生命令面板。**
+DSH Agent Team 模型选择插件。**1.8.3 起在根会话的模型与推理等级菜单中提供「Team 预设 / Team 模型 / Team 推理等级」三行配置，同时保留 `/team-preset`、`/team-model`、`/team-effort` 原生命令面板。**
 
 源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。
+
+## 1.8.3：清理 Team 选择器的显示
+
+- Team 模型和 Team 推理等级选项不再重复显示模型名；推理等级只列出模型实际支持的等级，不再混入“跟随主 Agent / 模型默认”。
+- Team 预设使用原生预设目录的本地化名称和一行说明，内置预设不再只显示名称。
+- 行内值、搜索、分组、勾选和保存逻辑不变。
 
 ## 1.8.2：改用 DSH 原生 popupSelect
 

@@ -13,7 +13,7 @@ const labels = {
   saveUnavailable: 'Save unavailable',
   noModel: 'No model',
 };
-const displayPreset = row => row.name ?? row.id;
+const displayPreset = row => ({ name: row.name ?? row.id, ...(row.description === undefined ? {} : { description: row.description }) });
 
 function harness(overrides = {}) {
   const writes = [];
@@ -88,12 +88,15 @@ test('loadTeamMenuData exposes preset, model and effort current values and optio
   const data = await loadTeamMenuData(h.ctx, 'lead', labels, displayPreset);
   assert.equal(data.preset.current, 'Coder');
   assert.equal(data.preset.options[1].active, true);
+  assert.equal(data.preset.options[1].detail, 'Writes code');
   assert.equal(data.preset.error, undefined);
   assert.equal(data.model.current, 'Follow main Agent');
   assert.equal(data.model.options[0].active, true);
+  assert.equal(data.model.options[1].detail, undefined);
   assert.equal(data.effort.current, 'Follow main Agent');
-  assert.equal(data.effort.options[0].active, true);
-  assert.equal(data.effort.options[1].active, false);
+  assert.equal(data.effort.options.length, 2);
+  assert.deepEqual(data.effort.options.map(option => option.label), ['Low', 'High']);
+  assert.equal(data.effort.options.some(option => option.label === 'Follow main Agent' || option.label === 'Model default'), false);
   assert.equal(data.preset.revision, 6);
   assert.equal(h.calls.list, 1);
   assert.equal(h.calls.describe, 1);

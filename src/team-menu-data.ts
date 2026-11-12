@@ -23,6 +23,11 @@ import type {
 
 export type TeamMenuKind = 'preset' | 'model' | 'effort';
 
+export interface PresetDisplayText {
+  name: string;
+  description?: string;
+}
+
 export type TeamMenuChoice =
   | { kind: 'preset'; preset: string | null }
   | { kind: 'model'; follow: true }
@@ -139,7 +144,7 @@ export async function loadTeamMenuData(
   ctx: TeamMenuContext,
   sessionId: string,
   labels: TeamMenuLabels,
-  displayPreset: (row: PresetRow) => string,
+  displayPreset: (row: PresetRow) => PresetDisplayText,
 ): Promise<TeamMenuData> {
   const { view, writable } = await readSettings(ctx, labels);
   const key = teamSessionKey(sessionId, ctx.sessions);
@@ -172,19 +177,23 @@ export async function loadTeamMenuData(
   const selectedRow = selectedPreset === null || selectedPreset === undefined
     ? undefined
     : presetRows.find(row => row.id === selectedPreset);
+  const selectedPresetText = selectedRow === undefined ? undefined : displayPreset(selectedRow);
   const presetCurrent = selectedPreset === null || selectedPreset === undefined
     ? labels.follow
-    : selectedRow === undefined ? selectedPreset : displayPreset(selectedRow);
+    : selectedPresetText?.name ?? selectedPreset;
   const presetOptions: TeamMenuOption[] = [
     { id: choiceId('menu-preset', null), label: labels.follow, active: selectedPreset === null || selectedPreset === undefined,
       choice: { kind: 'preset', preset: null } },
-    ...presetRows.map(row => ({
-      id: choiceId('menu-preset', row.id),
-      label: displayPreset(row),
-      ...(row.description === undefined ? {} : { detail: row.description }),
-      active: selectedPreset === row.id,
-      choice: { kind: 'preset' as const, preset: row.id },
-    })),
+    ...presetRows.map(row => {
+      const text = displayPreset(row);
+      return {
+        id: choiceId('menu-preset', row.id),
+        label: text.name,
+        ...(text.description === undefined ? {} : { detail: text.description }),
+        active: selectedPreset === row.id,
+        choice: { kind: 'preset' as const, preset: row.id },
+      };
+    }),
   ];
 
   let directory: TeamDirectoryState | undefined;
@@ -217,7 +226,6 @@ export async function loadTeamMenuData(
     ...models.flatMap(group => group.models.map(model => ({
       id: choiceId('menu-model', group.id, model.id),
       label: model.name,
-      detail: `${group.name} · ${model.id}`,
       group: { name: group.id, label: group.name },
       active: !follows && effective?.provider === group.id && effective.model === model.id,
       choice: { kind: 'model' as const, provider: group.id, model: model.id },
@@ -230,21 +238,12 @@ export async function loadTeamMenuData(
       : findModel(models, effective)?.name ?? effective.model;
 
   const effortModel = effective === null ? undefined : findModel(models, effective);
-  const effortOptions: TeamMenuOption[] = [
-    { id: choiceId('menu-effort', 'follow'), label: labels.follow, active: follows,
-      choice: { kind: 'effort', follow: true } },
-    { id: choiceId('menu-effort', 'default'), label: labels.modelDefault,
-      active: !follows && (pin?.modelDefault === true || pin?.reasoningEffort === undefined),
-      choice: { kind: 'effort', modelDefault: true } },
-    ...(effortModel?.reasoning?.efforts ?? []).map(effort => ({
-      id: choiceId('menu-effort', effort.id),
-      label: effort.name,
-      detail: `${effortModel?.name ?? effective?.model ?? ''} · ${effort.id}`,
-      group: { name: effortModel?.id ?? 'effort', label: effortModel?.name ?? effective?.model ?? '' },
-      active: !follows && pin?.modelDefault !== true && pin?.reasoningEffort === effort.id,
-      choice: { kind: 'effort' as const, effort: effort.id },
-    })),
-  ];
+  const effortOptions: TeamMenuOption[] = (effortModel?.reasoning?.efforts ?? []).map(effort => ({
+    id: choiceId('menu-effort', effort.id),
+    label: effort.name,
+    active: !follows && pin?.modelDefault !== true && pin?.reasoningEffort === effort.id,
+    choice: { kind: 'effort' as const, effort: effort.id },
+  }));
   const effortCurrent = follows
     ? labels.follow
     : pin?.modelDefault === true || pin?.reasoningEffort === undefined

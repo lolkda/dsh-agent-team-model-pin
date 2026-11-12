@@ -6,6 +6,7 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client';
 import type {} from '@deepseek-ai/dsh-client-ui-session/client';
 import type { PresetRow } from './preset-policy.ts';
+import type { PresetDisplayText } from './team-menu-data.ts';
 import { loadTeamMenuData, saveTeamMenuChoice } from './team-menu-data.ts';
 import type {
   TeamMenuChoice,
@@ -92,7 +93,7 @@ export class TeamMenuController {
   constructor(
     private readonly ctx: Parameters<typeof loadTeamMenuData>[0],
     private readonly labels: TeamMenuLabels,
-    private readonly displayPreset: (row: PresetRow) => string,
+    private readonly displayPreset: (row: PresetRow) => PresetDisplayText,
   ) {}
 
   load(sessionId: string): Promise<TeamMenuData> {

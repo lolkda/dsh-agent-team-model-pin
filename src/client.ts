@@ -121,10 +121,10 @@ export function apply(ctx: ClientContext): void {
     searchPreset: menuT('searchPreset'), searchModel: menuT('searchModel'), searchEffort: menuT('searchEffort'),
     empty: menuT('empty'), noResults: menuT('noResults'),
   };
-  const displayPreset = (row: Parameters<typeof presetDisplayText>[0]): string => presetDisplayText(row, key => {
+  const displayPreset = (row: Parameters<typeof presetDisplayText>[0]) => presetDisplayText(row, key => {
     const native = nativePresetText(key);
     return native === key ? menuT(key) : native;
-  }).name;
+  });
   let menuSettings: TeamMenuContext['remote']['settings'] | undefined;
   let menuAgentPresets: TeamMenuContext['remote']['agentPresets'];
   let menuTeamSettings: TeamMenuContext['remote']['teamSettings'];
