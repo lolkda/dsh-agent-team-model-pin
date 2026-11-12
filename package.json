@@ -1,6 +1,6 @@
 {
   "name": "@lolkda/dsh-agent-team-model-pin",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "description": "DSH Host/Web plugin: choose Team models, reasoning effort and creation-time Agent presets with native command menus",
   "keywords": [
     "dsh",
@@ -78,8 +78,10 @@
     "@deepseek-ai/dsh-client-store": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-ui-commands": "0.2.2-rc.1",
     "@deepseek-ai/dsh-client-ui-input-trigger": "0.2.2-rc.1",
-    "@deepseek-ai/dsh-client-ui-model-selection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-layout": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-model-selection": "0.2.2-rc.2",
     "@deepseek-ai/dsh-client-ui-primitives": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-client-ui-session": "0.2.2-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.1",
     "@deepseek-ai/dsh-experimental-agent-team": "0.2.2-rc.1",
     "@deepseek-ai/dsh-experimental-client-ui-agent-team": "0.2.2-rc.1",
@@ -138,7 +140,9 @@
         "@deepseek-ai/dsh-api-remotes",
         "@deepseek-ai/dsh-api-session-controller",
         "@deepseek-ai/dsh-api-settings-controller",
-        "@deepseek-ai/dsh-client-ui-input-trigger"
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-primitives"
       ]
     }
   }

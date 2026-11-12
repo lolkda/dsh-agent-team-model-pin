@@ -1,6 +1,9 @@
 import { build } from 'esbuild';
 
-// Browser artifact registers native command policies; it contains no React UI.
+// Browser artifact registers native command policies plus the model-menu rows.
+// React and the shared primitives stay external so the DSH module loader owns
+// one runtime copy; the rows join DSH's existing model menu rather than
+// shipping a separate picker or stylesheet.
 await build({
   entryPoints: ['src/client.ts'],
   outfile: 'dist/client.js',
@@ -8,7 +11,7 @@ await build({
   platform: 'browser',
   format: 'cjs',
   target: 'es2022',
-  external: [],
+  external: ['react', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'],
   banner: { js: `window.__ModuleLoader__.load({id:"@lolkda/dsh-agent-team-model-pin",factory(require){const module={exports:{}};const exports=module.exports;` },
   footer: { js: '\nreturn module.exports;}});' },
   logLevel: 'info',

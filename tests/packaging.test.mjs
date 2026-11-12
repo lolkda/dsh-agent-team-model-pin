@@ -31,10 +31,15 @@ test('packaging: the browser artifact registers the exact package module without
   assert.equal(typeof registration.factory, 'function');
 });
 
-test('packaging: native command menus ship no custom React picker or stylesheet', async () => {
+test('packaging: model-menu rows use shared React and register the native slots', async () => {
   assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-commands'));
+  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-primitives'));
+  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-layout'));
   const code = await readFile(new URL('../dist/client.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(code, /require\(["']react(?:-dom)?["']\)|atmp-trigger|data-atmp-pane|createPortal/);
+  assert.match(code, /require\(["']react(?:-dom)?["']\)/);
+  assert.match(code, /conversation\.input\.model\.options/);
+  assert.match(code, /shell\.overlay/);
+  assert.doesNotMatch(code, /atmp-trigger|data-atmp-pane/);
 });
 
 test('packaging: rebuilt dist contains no retired picker modules', async () => {

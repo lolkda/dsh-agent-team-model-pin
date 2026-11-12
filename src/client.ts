@@ -1,6 +1,10 @@
 /** Web half: contribute data/actions to DSH's native slash-command popups. */
+import { presetDisplayText } from '@deepseek-ai/dsh-agent-preset-registry/display';
 import { applyTeamPin } from './pin.ts';
 import { installPresetCommand } from './preset-client.ts';
+import type { PresetClientContext } from './preset-client.ts';
+import { TeamMenuController, TeamSettingsOverlay, TeamSettingsRows, teamMenuLocale } from './team-menu.tsx';
+import type { TeamMenuContext } from './team-menu-data.ts';
 import { TEAM_SETTINGS_REMOTE } from './team-settings-remote.ts';
 import type { TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol';
 import type { Pin } from './pin.ts';
@@ -40,6 +44,11 @@ interface Directory {
   store: { getSnapshot(): DirectoryState };
 }
 interface ClientContext {
+  slots?: {
+    inject(name: string, callback: () => unknown): unknown;
+    register(options: Record<string, unknown>, component: unknown): () => void;
+  };
+  inject?(dependencies: string[], callback: (child: ClientContext) => unknown): unknown;
   commandUi: {
     register(command: CommandRegistration): () => void;
     dismiss(name: string): void;
@@ -98,9 +107,73 @@ export const inject = ['commandUi', 'inputTriggers', 'locale', 'modelDirectories
 /** Register native popup policies without installing a component or stylesheet. */
 export function apply(ctx: ClientContext): void {
   ctx.effect(async function* () { yield await ctx.remote.$mount(TEAM_SETTINGS_REMOTE); });
-  installPresetCommand(ctx);
+  installPresetCommand(ctx as unknown as PresetClientContext);
   ctx.effect(() => ctx.locale.register('agentTeamModelPin', { zh, en }));
+  ctx.effect(() => ctx.locale.register('agentTeamMenu', teamMenuLocale));
   const t = ctx.locale.bind('agentTeamModelPin');
+  const menuT = ctx.locale.bind('agentTeamMenu');
+  const nativePresetText = ctx.locale.bind('settings.agentPreset');
+  const menuLabels = {
+    follow: menuT('follow'), modelDefault: menuT('modelDefault'), unavailable: menuT('unavailable'),
+    readOnly: menuT('readOnly'), missing: menuT('missing'), catalogUnavailable: menuT('catalogUnavailable'),
+    saveUnavailable: menuT('saveUnavailable'), noModel: menuT('noModel'),
+  };
+  const displayPreset = (row: Parameters<typeof presetDisplayText>[0]): string => presetDisplayText(row, key => {
+    const native = nativePresetText(key);
+    return native === key ? menuT(key) : native;
+  }).name;
+  let menuSettings: TeamMenuContext['remote']['settings'] | undefined;
+  let menuAgentPresets: TeamMenuContext['remote']['agentPresets'];
+  let menuTeamSettings: TeamMenuContext['remote']['teamSettings'];
+  if (ctx.inject) {
+    ctx.inject(['remote.settings'], child => {
+      const remote = (child.remote as unknown as TeamMenuContext['remote']).settings;
+      menuSettings = remote;
+      child.effect(() => () => { menuSettings = undefined; });
+    });
+    ctx.inject(['remote.agentPresets'], child => {
+      const remote = (child.remote as unknown as TeamMenuContext['remote']).agentPresets;
+      menuAgentPresets = remote;
+      child.effect(() => () => { menuAgentPresets = undefined; });
+    });
+    ctx.inject(['remote.teamSettings'], child => {
+      const remote = (child.remote as unknown as TeamMenuContext['remote']).teamSettings;
+      menuTeamSettings = remote;
+      child.effect(() => () => { menuTeamSettings = undefined; });
+    });
+  } else {
+    const direct = ctx.remote as unknown as TeamMenuContext['remote'];
+    try { menuSettings = direct.settings; } catch { /* required settings namespace is absent */ }
+    try { menuAgentPresets = direct.agentPresets; } catch { /* optional Remote namespace is absent */ }
+    try { menuTeamSettings = direct.teamSettings; } catch { /* optional Remote namespace is absent */ }
+  }
+  const menuRemote: TeamMenuContext['remote'] = {
+    get settings() {
+      if (menuSettings === undefined) throw new Error('remote.settings is unavailable');
+      return menuSettings;
+    },
+    get agentPresets() { return menuAgentPresets; },
+    get teamSettings() { return menuTeamSettings; },
+  };
+  const menu = new TeamMenuController({ remote: menuRemote, sessions: ctx.sessions, modelDirectories: ctx.modelDirectories }, menuLabels, displayPreset);
+  ctx.inject?.(['slots'], child => {
+    child.effect(() => {
+      const slots = child.slots;
+      if (slots === undefined) return;
+      const offRows = slots.inject('conversation.input.model.options', () => slots.register({
+        name: 'conversation.input.model.options', id: 'agent-team-model-pin-settings', locale: 'agentTeamMenu',
+        inject: () => ({ controller: menu }),
+      }, TeamSettingsRows));
+      const offOverlay = slots.inject('shell.overlay', () => slots.register({
+        name: 'shell.overlay', id: 'agent-team-model-pin-settings', locale: 'agentTeamMenu',
+        inject: () => ({ controller: menu, hooks: { request: menu.requests } }),
+      }, TeamSettingsOverlay));
+      return () => {
+        if (typeof offRows === 'function') offRows();
+        if (typeof offOverlay === 'function') offOverlay();
+      };
+    });
+  });
   const commands = ctx.commandUi;
   // Refuse retired argument syntax rather than accidentally sending a settings
   // command to the conversation model. This public source contributes no rows.

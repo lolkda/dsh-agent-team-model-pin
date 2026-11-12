@@ -1,8 +1,15 @@
 # dsh-agent-team-model-pin
 
-DSH Agent Team 模型选择插件。**1.4.0 起通过原生 `/team-model` 和 `/team-effort` 搜索选择面板设置队友模型，不再替换输入框的原生模型选择器，也不提供仿原生 CSS 或常驻按钮。**
+DSH Agent Team 模型选择插件。**1.8.0 起在根会话的模型与推理等级菜单中提供「Team 预设 / Team 模型 / Team 推理等级」三行配置，同时保留 `/team-preset`、`/team-model`、`/team-effort` 原生命令面板。**
 
 源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。
+
+## 1.8.0：模型菜单中的三项 Team 配置
+
+- 使用 DSH `0.2.2-rc.2` 的公开 Client 插槽 `conversation.input.model.options`，在根会话的模型与推理等级菜单中增加三行：**Team 预设 / Team 模型 / Team 推理等级**。
+- 每行显示当前有效值；点击后关闭模型菜单并打开选择对话框，保存复用现有的 `teamSettings.preset` RPC 和 Settings 写入路径。模型、推理等级的“跟随主 Agent / 模型默认”语义与命令面板一致。
+- 只在根会话显示；子代理会话隐藏。Team 模式开关仍由 DSH 内置项管理，本插件不覆盖它。
+- 现有 `/team-preset`、`/team-model`、`/team-effort` 命令和配置格式保持不变；不需要迁移。
 
 ## 1.7.2：支持未开启 Team 模式的 Lead 配置 Team 预设
 
