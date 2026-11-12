@@ -10,6 +10,7 @@ function modernHost({ enabled = true, names = {} } = {}) {
   return {
     get(name) {
       if (name === 'agentTeams') return { isEnabled: root => enabled && root.id === 'lead' };
+      if (name === 'agents') return { get(id) { return id === 'lead' ? lead : id === 'teammate' ? teammate : undefined; } };
       if (name === 'subagents') return {
         rootOf(agent) { return agent.id === 'teammate' ? lead : agent; },
         namesOf(agent) { return { name: names[agent.id] }; },
@@ -24,6 +25,10 @@ test('rc.2 membership: Team root is lead, descendant is teammate, disabled/ordin
   assert.deepEqual(resolveTeamMembership(host, teammate), { root: lead, id: 'lead', role: 'teammate', name: 'reviewer' });
   assert.equal(resolveTeamMembership(modernHost({ enabled: false }), teammate), undefined);
   assert.equal(resolveTeamMembership(modernHost(), ordinary), undefined);
+  // Remote RPC callers pass only a durable { id }; resolve it before touching
+  // subagents.rootOf(), which requires the live Agent object.
+  assert.deepEqual(resolveTeamMembership(host, { id: 'lead' }), { root: lead, id: 'lead', role: 'lead', name: 'lead' });
+  assert.deepEqual(resolveTeamMembership(host, { id: 'teammate' }), { root: lead, id: 'lead', role: 'teammate', name: 'reviewer' });
 });
 
 test('legacy membership wins for rc.1 hosts and preserves roster failures', () => {

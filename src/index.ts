@@ -348,9 +348,16 @@ export function apply(ctx: PluginCtx, config: unknown): void {
     subagentScope = scope;
     return () => { if (subagentScope === scope) subagentScope = undefined; };
   });
+  let agentScope: { get(name: string): unknown } | undefined;
+  ctx.inject(['agents'], (child) => {
+    const scope = child as unknown as { get(name: string): unknown };
+    agentScope = scope;
+    return () => { if (agentScope === scope) agentScope = undefined; };
+  });
   const membershipHost = {
     get(name: string): unknown {
       if (name === 'subagents') return subagentScope?.get(name);
+      if (name === 'agents') return agentScope?.get(name);
       const injected = ctx.get(name);
       if (injected !== undefined) return injected;
       try { return (ctx as unknown as Record<string, unknown>)[name]; } catch { return undefined; }

@@ -28,6 +28,10 @@ interface SubagentServiceLike<TAgent extends TeamMemberAgent> {
   namesOf?(agent: TAgent): { readonly name?: string } | undefined;
 }
 
+interface AgentLookup<TAgent extends TeamMemberAgent> {
+  get(id: string): TAgent | undefined;
+}
+
 interface ServiceHost {
   get(name: string): unknown;
 }
@@ -66,24 +70,31 @@ export function resolveTeamMembership<TAgent extends TeamMemberAgent>(
   host: ServiceHost,
   agent: TAgent,
 ): TeamMembership<TAgent> | undefined {
+  // Remote RPC entry points pass a durable { id } reference, while DSH's
+  // subagent tree APIs require the exact live Agent object. Resolve the live
+  // identity before consulting either membership API.
+  const agents = service<AgentLookup<TAgent>>(host, 'agents');
+  let live = agent;
+  try { live = agents?.get(agent.id) ?? agent; } catch { live = agent; }
+
   const teams = service<TeamServiceLike<TAgent>>(host, 'agentTeams');
   if (typeof teams?.tryMembership === 'function') {
     // Preserve the legacy service's failure semantics so callers can log or
     // reject instead of silently treating a broken roster as a non-member.
-    return teams.tryMembership(agent);
+    return teams.tryMembership(live);
   }
 
   const subagents = service<SubagentServiceLike<TAgent>>(host, 'subagents');
   if (typeof teams?.isEnabled !== 'function' || typeof subagents?.rootOf !== 'function') return undefined;
   try {
-    const root = subagents.rootOf(agent);
+    const root = subagents.rootOf(live);
     if (root === undefined || typeof root.id !== 'string' || !teams.isEnabled(root)) return undefined;
-    const name = subagents.namesOf?.(agent)?.name;
+    const name = subagents.namesOf?.(live)?.name;
     return {
       root,
       id: root.id,
-      role: root.id === agent.id ? 'lead' : 'teammate',
-      name: typeof name === 'string' && name.length > 0 ? name : agent.id,
+      role: root.id === live.id ? 'lead' : 'teammate',
+      name: typeof name === 'string' && name.length > 0 ? name : live.id,
     };
   } catch {
     return undefined;

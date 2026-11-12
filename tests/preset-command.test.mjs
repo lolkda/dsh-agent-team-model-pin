@@ -136,3 +136,29 @@ test('popup save rejects nonmembers and accepts preset IDs matching former CLI k
   assert.equal((await h.invoke('apply 7 "show"')).kind, 'success');
   assert.equal(h.settings.presetSessions.lead, 'show');
 });
+
+test('rc.2 RPC id reference resolves the live Agent before subagent membership', async () => {
+  const liveLead = { id: 'lead' };
+  const settings = { describe: () => [{ ns: NS, revision: 1 }], async mutate() {} };
+  const presets = { resolve: async id => ({ id }) };
+  const host = {
+    get(name) {
+      return ({
+        settings,
+        agentPresets: presets,
+        agents: { get(id) { return id === 'lead' ? liveLead : undefined; } },
+        agentTeams: { isEnabled(root) { assert.equal(root, liveLead); return true; } },
+        subagents: {
+          childSetupVersion: 1, registerChildSetup() {},
+          rootOf(agent) { assert.equal(agent, liveLead); return liveLead; },
+          namesOf(agent) { assert.equal(agent, liveLead); return { name: 'lead' }; },
+        },
+      })[name];
+    },
+    agentTeams: undefined,
+    effect(callback) { return callback(); },
+  };
+  const command = createPresetCommand(host, () => NS);
+  const result = await command.handler({ agent: { id: 'lead' }, rawInput: 'apply 1 "coder"', signal: new AbortController().signal });
+  assert.equal(result.kind, 'success');
+});
