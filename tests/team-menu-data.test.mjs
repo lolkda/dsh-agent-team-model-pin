@@ -94,9 +94,10 @@ test('loadTeamMenuData exposes preset, model and effort current values and optio
   assert.equal(data.model.options[0].active, true);
   assert.equal(data.model.options[1].detail, undefined);
   assert.equal(data.effort.current, 'Follow main Agent');
-  assert.equal(data.effort.options.length, 2);
-  assert.deepEqual(data.effort.options.map(option => option.label), ['Low', 'High']);
-  assert.equal(data.effort.options.some(option => option.label === 'Follow main Agent' || option.label === 'Model default'), false);
+  assert.equal(data.effort.options.length, 4);
+  assert.deepEqual(data.effort.options.map(option => option.label), ['Follow main Agent', 'Model default', 'Low', 'High']);
+  assert.equal(data.effort.options[0].active, true);
+  assert.equal(data.effort.options[1].active, false);
   assert.equal(data.preset.revision, 6);
   assert.equal(h.calls.list, 1);
   assert.equal(h.calls.describe, 1);

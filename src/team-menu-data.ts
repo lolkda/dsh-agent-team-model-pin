@@ -238,12 +238,19 @@ export async function loadTeamMenuData(
       : findModel(models, effective)?.name ?? effective.model;
 
   const effortModel = effective === null ? undefined : findModel(models, effective);
-  const effortOptions: TeamMenuOption[] = (effortModel?.reasoning?.efforts ?? []).map(effort => ({
-    id: choiceId('menu-effort', effort.id),
-    label: effort.name,
-    active: !follows && pin?.modelDefault !== true && pin?.reasoningEffort === effort.id,
-    choice: { kind: 'effort' as const, effort: effort.id },
-  }));
+  const effortOptions: TeamMenuOption[] = [
+    { id: choiceId('menu-effort', 'follow'), label: labels.follow, active: follows,
+      choice: { kind: 'effort', follow: true } },
+    { id: choiceId('menu-effort', 'default'), label: labels.modelDefault,
+      active: !follows && (pin?.modelDefault === true || pin?.reasoningEffort === undefined),
+      choice: { kind: 'effort', modelDefault: true } },
+    ...(effortModel?.reasoning?.efforts ?? []).map(effort => ({
+      id: choiceId('menu-effort', effort.id),
+      label: effort.name,
+      active: !follows && pin?.modelDefault !== true && pin?.reasoningEffort === effort.id,
+      choice: { kind: 'effort' as const, effort: effort.id },
+    })),
+  ];
   const effortCurrent = follows
     ? labels.follow
     : pin?.modelDefault === true || pin?.reasoningEffort === undefined
