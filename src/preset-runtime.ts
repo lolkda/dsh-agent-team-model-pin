@@ -115,6 +115,9 @@ function installNativePresetRuntime(host: Context, capture: TeamPresetCapture): 
     const legacyTeams = service<LegacyTeams>(access, 'agentTeams');
     const membership = resolveTeamMembership(access, parent);
     if (membership === undefined) return;
+    // A root Lead is a valid /team-preset target even before Team mode is
+    // enabled, but ordinary subagents must never receive Team preset policy.
+    if (membership.teamEnabled === false) return;
     if (typeof legacyTeams?.tryMembership === 'function') {
       // The 0.2.1 roster only has direct Lead children; preserve that boundary.
       if (membership.role !== 'lead' || membership.root !== parent) return;

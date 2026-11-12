@@ -12,7 +12,11 @@ function modernHost({ enabled = true, names = {} } = {}) {
       if (name === 'agentTeams') return { isEnabled: root => enabled && root.id === 'lead' };
       if (name === 'agents') return { get(id) { return id === 'lead' ? lead : id === 'teammate' ? teammate : undefined; } };
       if (name === 'subagents') return {
-        rootOf(agent) { return agent.id === 'teammate' ? lead : agent; },
+        rootOf(agent) {
+          if (agent.id === 'teammate') return lead;
+          if (agent.id === 'ordinary') return { id: 'ordinary-root' };
+          return agent;
+        },
         namesOf(agent) { return { name: names[agent.id] }; },
       };
     },
@@ -24,6 +28,8 @@ test('rc.2 membership: Team root is lead, descendant is teammate, disabled/ordin
   assert.deepEqual(resolveTeamMembership(host, lead), { root: lead, id: 'lead', role: 'lead', name: 'lead' });
   assert.deepEqual(resolveTeamMembership(host, teammate), { root: lead, id: 'lead', role: 'teammate', name: 'reviewer' });
   assert.equal(resolveTeamMembership(modernHost({ enabled: false }), teammate), undefined);
+  assert.deepEqual(resolveTeamMembership(modernHost({ enabled: false }), lead),
+    { root: lead, id: 'lead', role: 'lead', name: 'lead', teamEnabled: false });
   assert.equal(resolveTeamMembership(modernHost(), ordinary), undefined);
   // Remote RPC callers pass only a durable { id }; resolve it before touching
   // subagents.rootOf(), which requires the live Agent object.

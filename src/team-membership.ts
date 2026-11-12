@@ -16,6 +16,8 @@ export interface TeamMembership<TAgent extends TeamMemberAgent = TeamMemberAgent
   readonly id: string;
   readonly role: 'lead' | 'teammate';
   readonly name: string;
+  /** Present and false when the root is a Lead but Team mode is not enabled. */
+  readonly teamEnabled?: boolean;
 }
 
 interface TeamServiceLike<TAgent extends TeamMemberAgent> {
@@ -88,13 +90,19 @@ export function resolveTeamMembership<TAgent extends TeamMemberAgent>(
   if (typeof teams?.isEnabled !== 'function' || typeof subagents?.rootOf !== 'function') return undefined;
   try {
     const root = subagents.rootOf(live);
-    if (root === undefined || typeof root.id !== 'string' || !teams.isEnabled(root)) return undefined;
+    if (root === undefined || typeof root.id !== 'string') return undefined;
+    const teamEnabled = teams.isEnabled(root);
+    // DSH 0.2.1 returned Lead membership even before Team mode was enabled.
+    // Preserve that for the root so /team-preset remains configurable for a
+    // future Team, while ordinary subagents still fall outside Team scope.
+    if (!teamEnabled && root.id !== live.id) return undefined;
     const name = subagents.namesOf?.(live)?.name;
     return {
       root,
       id: root.id,
       role: root.id === live.id ? 'lead' : 'teammate',
       name: typeof name === 'string' && name.length > 0 ? name : live.id,
+      ...(teamEnabled ? {} : { teamEnabled: false }),
     };
   } catch {
     return undefined;

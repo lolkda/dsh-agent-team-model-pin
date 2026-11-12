@@ -4,6 +4,11 @@ DSH Agent Team 模型选择插件。**1.4.0 起通过原生 `/team-model` 和 `/
 
 源码为 TypeScript，不修改 DSH 官方包或 shipped preset。行为契约见 [SPEC](docs/SPEC.md)，1.0.0 的历史独立验收见 [验证报告](docs/VERIFICATION-REPORT.md)。
 
+## 1.7.2：支持未开启 Team 模式的 Lead 配置 Team 预设
+
+- DSH 0.2.1 的 `tryMembership()` 会把任意 root/Lead 视为 Team Lead；DSH 0.2.2-rc.2 的 `agentTeams.isEnabled()` 只有在 Team 模式已开启时才返回 true。现在 root/Lead 即使尚未开启 Team 模式也允许保存 `/team-preset` 策略，普通子代理仍严格排除在 Team preset 作用域之外。
+- 修复后的 Host RPC 继续使用 live Agent 解析，兼容 Web 传入的持久化 session id；新增未开启 Team 模式的 RPC 回归测试。
+
 ## 1.7.1：修复 rc.2 `/team-preset` 的 RPC 成员判定
 
 - 修复 DSH 0.2.2-rc.2 下打开 `/team-preset` 选择预设后提示“当前 Agent 不属于可配置的 Agent Team”的问题。Web Remote 传入的是持久化 Agent/Session id，不是 live Agent 对象；插件现在先通过 `ctx.agents.get(id)` 解析 live Agent，再调用 `subagents.rootOf()` / `agentTeams.isEnabled()`。
@@ -140,7 +145,7 @@ npm run check
 本适配版应先构建并 `npm pack --ignore-scripts`，再通过插件管理器安装生成的 `.tgz` 绝对路径；不要直接链接带有开发版 SDK 的工作区：
 
 ```text
-plugin_manager action=install_bundle target=/app/project/dsh-agent-team-model-pin/lolkda-dsh-agent-team-model-pin-1.7.1.tgz
+plugin_manager action=install_bundle target=/app/project/dsh-agent-team-model-pin/lolkda-dsh-agent-team-model-pin-1.7.2.tgz
 ```
 
 安装影响当前 profile 的所有会话，Team 配置则按会话隔离。Web UI 需要 DSH 原生命令 UI（含 `decorate` / `popupSelect`）、模型目录及 Agent Teams 功能；开发与集成测试目标为 `0.2.2-rc.2`；DSH npm 包同步前本地可用 `0.2.2-rc.1` 回归。
