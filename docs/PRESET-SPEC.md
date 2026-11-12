@@ -1,6 +1,6 @@
-# Team 创建时预设选择 · 1.5.0-rc.1
+# Team 创建时预设选择 · 1.7.0
 
-> 1.6.0 适配注：当前部署的 DSH 0.2.2-rc.1 已在 `@deepseek-ai/dsh-subagent` 提供 `childSetupVersion = 1` / `registerChildSetup()`，因此预设功能不再需要 `patches/` 下的宿主补丁；旧版本仍按能力检测 fail-closed。
+> 1.7.0 适配注：DSH 0.2.2-rc.2 的 Team 成员改由 `ctx.subagents` 子代理树表示；插件通过 `rootOf()` + `agentTeams.isEnabled()` 识别 Lead/teammate，旧 `tryMembership()` 仍兼容。rc.2 原生没有按 Lead 保存并在发布前应用任意预设的插件钩子，因此具体预设仍需 `patches/` 下的 `childSetupVersion = 1` / `registerChildSetup()` 宿主补丁；缺少接口时 fail-closed，`/team-preset` 选择“跟随 Lead”不依赖该补丁。
 
 ## 确认的产品目标
 

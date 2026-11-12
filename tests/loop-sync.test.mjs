@@ -35,6 +35,7 @@ test('actual AgentLoop: captured model request and persisted prompt share the se
       return { config, stream(request) { requests.push(request); throw sentinel; } };
     } });
     owner.provide('commands', { register() { return () => {}; } });
+    owner.provide('subagents', {});
     owner.provide('agentTeams', { tryMembership(agent) {
       return { root: agent.id === 'loop-mate' ? lead : agent, id: 'loop-team', name: agent.id, role: agent.id === 'loop-mate' ? 'teammate' : 'lead' };
     } });

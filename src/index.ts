@@ -33,6 +33,8 @@ import { resolvePresetPolicy } from './preset-policy.ts';
 import { createPresetCommand } from './preset-command.ts';
 import { installTeamSettingsRpc } from './team-settings-rpc.ts';
 import { installTeamPresetRuntime } from './preset-runtime.ts';
+import { resolveTeamMembership } from './team-membership.ts';
+import type { TeamMembership } from './team-membership.ts';
 
 /**
  * settings 命名空间 = Loader 入口 id（SPEC 5.4 的 rc.1 形态）。
@@ -64,13 +66,8 @@ interface AgentLike {
   model?: SyncAgent['model'];
 }
 
-/** `ctx.agentTeams.tryMembership` 的返回值（SPEC 3）。 */
-interface MembershipLike {
-  root: AgentLike;
-  id: string;
-  role: Role;
-  name: string;
-}
+/** Resolved Team membership, cross-version (SPEC 3). */
+type MembershipLike = TeamMembership<AgentLike>;
 
 /** `agent/request` 瀑布的调用配置（SPEC 3）。 */
 interface LlmCallConfigLike {
@@ -135,9 +132,12 @@ type RequestListener = (
 /** 插件上下文（只声明本插件用到的成员）。 */
 interface PluginCtx {
   logger: { warn(format: unknown, ...params: unknown[]): void };
-  agentTeams: { tryMembership(agent: AgentLike): MembershipLike | undefined };
+  agentTeams?: {
+    tryMembership?(agent: AgentLike): MembershipLike | undefined;
+    isEnabled?(agent: AgentLike): boolean;
+  };
   provide(name: string, value: unknown): unknown;
-  inject(deps: string[], callback: (child: { settings: SettingsLike }) => void): unknown;
+  inject(deps: string[], callback: (child: { settings?: SettingsLike; get?(name: string): unknown }) => void | (() => void)): unknown;
   get(name: string): unknown;
   on(event: string, listener: RequestListener): () => void;
   effect(callback: () => unknown): unknown;
@@ -338,6 +338,24 @@ export function apply(ctx: PluginCtx, config: unknown): void {
   // references); a direct `apply` call may hand over plain values instead.
   const raw: Partial<Record<keyof PluginConfig, unknown>> =
     config !== null && typeof config === 'object' ? (config as Record<string, unknown>) : {};
+
+  // `subagents` is optional at load time so minimal hosts and rc.1 profiles
+  // still activate. Resolve it lazily through an injected child scope for the
+  // rc.2 tree-membership path; the legacy agentTeams roster works without it.
+  let subagentScope: { get(name: string): unknown } | undefined;
+  ctx.inject(['subagents'], (child) => {
+    const scope = child as unknown as { get(name: string): unknown };
+    subagentScope = scope;
+    return () => { if (subagentScope === scope) subagentScope = undefined; };
+  });
+  const membershipHost = {
+    get(name: string): unknown {
+      if (name === 'subagents') return subagentScope?.get(name);
+      const injected = ctx.get(name);
+      if (injected !== undefined) return injected;
+      try { return (ctx as unknown as Record<string, unknown>)[name]; } catch { return undefined; }
+    },
+  };
 
   /**
    * Effective scope, read live. A volatile `scope` field can be rewritten by a
@@ -572,7 +590,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
 
         let membership: MembershipLike | undefined;
         try {
-          membership = ctx.agentTeams.tryMembership(agent);
+          membership = resolveTeamMembership(membershipHost, agent);
         } catch (error) {
           warnOnce('command-membership', `agent-team-model-pin: 团队成员判定失败，按非成员处理：${errorText(error)}`);
         }
@@ -668,14 +686,14 @@ export function apply(ctx: PluginCtx, config: unknown): void {
   // Independent paths: model/effort writes and clear never erase the preset choice.
   let refreshModelSync: () => void = () => {};
   const readPreset = (leadId: string) => resolvePresetPolicy(configValue(raw.presetDefault), configValue(raw.presetSessions), leadId);
-  installTeamSettingsRpc(ctx, { model: modelCommand.handler, preset: createPresetCommand(ctx, entryId).handler });
-  installTeamPresetRuntime(ctx as unknown as Context, readPreset);
+  installTeamSettingsRpc(ctx, { model: modelCommand.handler, preset: createPresetCommand(membershipHost, entryId).handler });
+  installTeamPresetRuntime(ctx as unknown as Context, readPreset, membershipHost);
 
   /* ---------- 5. Scoped prompt/request selection and legacy compatibility ---------- */
 
   const synchronized = installTeamModelSync(ctx as unknown as Context, (agent) => {
     try {
-      const membership = ctx.agentTeams.tryMembership(agent);
+      const membership = resolveTeamMembership(membershipHost, agent);
       const sessionId = membership?.root.id ?? agent.id;
       const pin = effectivePin(sessionId, membership?.role);
       if (pin === undefined && membership?.role !== 'teammate') return undefined;
@@ -713,7 +731,7 @@ export function apply(ctx: PluginCtx, config: unknown): void {
     let sessionId = agent.id;
     let pin: Pin | undefined;
     try {
-      membership = ctx.agentTeams.tryMembership(agent);
+      membership = resolveTeamMembership(membershipHost, agent);
       sessionId = membership?.root?.id ?? agent.id;
       pin = effectivePin(sessionId, membership?.role);
     } catch (error) {

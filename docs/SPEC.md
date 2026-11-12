@@ -4,6 +4,8 @@
 > 任何实现与本文冲突，以本文为准；需要改契约时先回报 Lead，由 Lead 更新本文后各方再动。
 > 1.6.0 适配注（DSH 0.2.2）：第 4 节 R5 的“请求进入 `agent/request` 时读取当前解析结果”改由 Agent 原生模型选择实现——在 `agent/inbox/claimed`（标准 Loop 捕获本步 `modelSelection` 之前）和 `agent/status = running` 时调用 `agent.model.current()/select()`。R5 的对外语义不变：改钉后下一次组装生效，本步及重试复用已捕获选择，已发出的请求不回改。`agent/request` 不再允许修改 provider/model/reasoningEffort。
 >
+> 1.7.0 适配注：Team 身份判定在 DSH 0.2.2-rc.2 改由 `ctx.subagents.rootOf()` + `ctx.agentTeams.isEnabled()` 完成；旧 `ctx.agentTeams.tryMembership()` 保留为 0.2.1 兼容路径。下文涉及 `tryMembership` 的历史冻结描述按此双路径理解，R1/R2 语义不变。
+>
 > 当前补充契约：插件 1.4.0。第 15 节定义原生斜杠菜单，取代历史的自写模型选择器与四项菜单要求；第 14 节的 optional-peer `*` 和 SDK 单实例要求继续保留。第 8 节是历史团队协作安排，本轮由主 Agent 单独修改、验证，不启动队友。
 
 ## 1. 目标与成功标准
@@ -40,7 +42,7 @@
   `LlmCallConfig = { provider, model, reasoningEffort?, temperature?, maxTokens?, stop? }`。
   DSH 自身的模型选择走同一条路（`dsh-agent/lib/types/model-selection.js:62`）。
 - 无标签监听器保持全局（`dsh-scope` README），因此**一个** profile 级监听器即可覆盖所有 agent。
-- 身份判定：`ctx.agentTeams.tryMembership(agent)` → `{ root, id, role: 'lead'|'teammate', name } | undefined`（同步、不抛）。
+- 身份判定：DSH 0.2.2-rc.2 用 `ctx.subagents.rootOf(agent)` + `ctx.agentTeams.isEnabled(root)` 得到 `{ root, id, role: 'lead'|'teammate', name }`；旧宿主仍走 `ctx.agentTeams.tryMembership(agent)`。
 - 编辑器：`ctx.commands.register({ name, description, input: { hint }, handler })`，
   handler 收到 `{ agent, rawInput, signal }`，返回 `{ kind: 'success', text? } | { kind: 'error', text }`。
 - 存储（DSH 0.1.7-rc.1）：插件导出 `Config`，以 `agent-team-model-pin` entry id 定位原生 Settings 表单；`scope`、`defaults`、`sessions` 是 volatile 字段。`settings.mutate(entryId, ops, revision)` 持久化到 Profile patch，并原地提交运行中的引用；旧同名 `settings.yaml` 段由 DSH 导入且原文件保留为 `.imported`。

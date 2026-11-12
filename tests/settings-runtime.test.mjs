@@ -27,6 +27,7 @@ async function harness(t, composition = { scope: 'teammates', defaults: {}, sess
   // 也就不会被 SettingsForms 投影成可配置入口。
   await root.plugin({ name: 'atmp-settings-deps', apply(owner) {
     owner.provide('agentTeams', { tryMembership: () => undefined });
+    owner.provide('subagents', {});
     owner.provide('commands', { register: () => () => {} });
   } });
   const fiber = await root.plugin(plugin, { ...composition, auditPath });

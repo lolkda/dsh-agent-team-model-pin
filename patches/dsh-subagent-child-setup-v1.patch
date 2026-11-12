@@ -1,39 +1,19 @@
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -1810,6 +1810,32 @@
- 					await workingDirectory.set(child, create.cwd, inputs.signal);
+@@ -1952,6 +1952,12 @@
  				}
- 				if (inputs.composition.agentPreset === void 0) await applyChildComposition(childCtx, parent, inputs.composition);
-+				// Restore the child's durable identity even when the selecting plugin was removed.
-+				// Parent fork events are not the child's selection; its header is the fallback.
-+				if (create === undefined) {
-+				    let presetId = child.session.header.agentPreset;
-+				    for (const event of child.session.snapshotEvents(child.session.inheritedEventCount)) {
-+				        if (event.type === 'agent-preset/selected') {
-+				            if (typeof event.data?.agentPreset !== 'string' || event.data.agentPreset.length === 0) {
-+				                throw new Error('Invalid persisted child agent-preset selection');
-+				            }
-+				            presetId = event.data.agentPreset;
-+				        }
-+				    }
-+				    if (presetId !== undefined) {
-+				        const presets = childCtx.get('agentPresets');
-+				        if (presets === undefined) throw new Error('Cannot restore child preset without agentPresets');
-+				        inputs.signal.throwIfAborted();
-+				        await presets.mount(childCtx, presetId);
-+				        inputs.signal.throwIfAborted();
-+				    }
-+				}
-+				// Run before agent/created dispatch snapshots preset-scoped listeners.
+ 				if (inputs.composition.agentPreset === void 0) await applyChildComposition(childCtx, create?.parent, inputs.composition);
+ 				if (inputs.outputSchema !== void 0) structured = attachStructuredRuntime(childCtx, inputs.outputSchema, () => child.inbox.nextStep.length === 0 && child.inbox.nextTurn.length === 0);
++				const setupParent = create?.parent ?? (child.session.header.parentSession === undefined ? inputs.root : this.ctx.agents.get(child.session.header.parentSession) ?? inputs.root);
 +				return await this.host.prepareChildSetup({
-+				    childCtx, child, parent,
++				    childCtx, child, parent: setupParent,
 +				    source: create === undefined ? 'resume' : 'startup',
 +				    signal: inputs.signal,
 +				});
- 				if (inputs.outputSchema !== void 0) structured = attachStructuredRuntime(childCtx, inputs.outputSchema, () => this.resident.get(childId)?.ownedChildren.size === 0 && child.inbox.nextStep.length === 0 && child.inbox.nextTurn.length === 0);
  			};
  			const handle = create === void 0 ? await this.ownerCtx.agents.resume({
-@@ -2995,6 +3021,7 @@
+ 				resumeSessionId: childId,
+@@ -2965,6 +2971,7 @@
  		});
  		static inject = ["workingDirectory", "sessionProjections"];
  		providers = /* @__PURE__ */ new Map();
@@ -41,19 +21,19 @@
  		manager;
  		/**
  		* The contained lifecycle-edge publisher. Built here because scoped dispatch
-@@ -3012,7 +3039,8 @@
- 						return this.expectProvider(name).start(request);
- 					},
- 					prepareContinuable: (name, request) => this.prepareContinuable(name, request),
--					observeActivation: (provider, childId, parent) => this.observeActivation(provider, childId, parent)
-+					observeActivation: (provider, childId, parent) => this.observeActivation(provider, childId, parent),
-+					prepareChildSetup: payload => this.prepareChildSetup(payload)
+@@ -2987,7 +2994,8 @@
+ 				const manager = new SubagentManager(childCtx, {
+ 					identityOf: (session) => identityProjection.stateOf(session).identity,
+ 					catalogOf: (session) => subagentCatalogProjectionDefinition.wire.view(catalogProjection.stateOf(session)),
+-					emitLifecycle: this.emitLifecycle
++					emitLifecycle: this.emitLifecycle,
++					prepareChildSetup: (payload) => this.prepareChildSetup(payload)
  				}, () => this.config.maxActiveSubagents.get());
  				this.manager = manager;
  				childCtx.effect(() => () => {
-@@ -3030,6 +3058,47 @@
- 			await sessionProjections.register(subagentTimingProjectionDefinition);
- 			await sessionProjections.register(subagentIdentityProjectionDefinition);
+@@ -2996,6 +3004,47 @@
+ 				}, "subagents.managerBinding()");
+ 			});
  		}
 +		/** Versioned, native, pre-publication continuable-child setup capability. */
 +		get childSetupVersion() { return 1; }
@@ -99,13 +79,93 @@
  		/**
  		* Resolve a delegation tool's depth policy against the current user setting.
  		* @param configured - Explicit tool limit, or provider-managed for external delegation.
+--- a/lib/types/index.js
++++ b/lib/types/index.js
+@@ -79,6 +79,7 @@
+         });
+         static inject = ['workingDirectory', 'sessionProjections'];
+         providers = new Map();
++        childSetupHooks = new Set();
+         manager;
+         /**
+          * The contained lifecycle-edge publisher. Built here because scoped dispatch
+@@ -103,6 +104,7 @@
+                     identityOf: session => identityProjection.stateOf(session).identity,
+                     catalogOf: session => subagentCatalogProjectionDefinition.wire.view(catalogProjection.stateOf(session)),
+                     emitLifecycle: this.emitLifecycle,
++                    prepareChildSetup: payload => this.prepareChildSetup(payload),
+                 }, () => this.config.maxActiveSubagents.get());
+                 this.manager = manager;
+                 childCtx.effect(() => () => {
+@@ -112,6 +114,47 @@
+                 }, 'subagents.managerBinding()');
+             });
+         }
++        /** Versioned, native, pre-publication continuable-child setup capability. */
++        get childSetupVersion() { return 1; }
++        /** Register trusted composition-only setup; its calling fiber owns the registration. */
++        registerChildSetup(callback) {
++            if (typeof callback !== 'function') throw new TypeError('Child setup callback must be a function');
++            const entry = { callback, active: true };
++            return this.ctx.effect(function* () {
++                this.childSetupHooks.add(entry);
++                yield () => { entry.active = false; this.childSetupHooks.delete(entry); };
++            }.bind(this), 'subagents.registerChildSetup()');
++        }
++        /** Snapshot registrations once; owner disposal during preparation fails closed. */
++        async prepareChildSetup(payload) {
++            const entries = [...this.childSetupHooks];
++            const commits = [];
++            const assertCurrent = () => {
++                payload.signal.throwIfAborted();
++                if (entries.some(entry => !entry.active)) throw new Error('Child setup owner disposed during initialization');
++            };
++            assertCurrent();
++            for (const entry of entries) {
++                const prepared = await entry.callback(payload);
++                assertCurrent();
++                if (prepared !== undefined) {
++                    if (prepared === null || typeof prepared.commit !== 'function') throw new TypeError('Child setup must return void or a synchronous commit');
++                    commits.push(() => prepared.commit());
++                }
++            }
++            return { commit() {
++                assertCurrent();
++                for (const commit of commits) {
++                    const returned = commit();
++                    // Do not let an async commit escape the publication transaction.
++                    if (returned !== undefined) {
++                        if (returned && typeof returned.then === 'function') void Promise.resolve(returned).catch(() => {});
++                        throw new TypeError('Child setup commit must be synchronous and return void');
++                    }
++                    assertCurrent();
++                }
++            } };
++        }
+         /**
+          * Resolve a delegation tool's depth policy against the current user setting.
+          * @param configured - Explicit tool limit, or provider-managed for external delegation.
+--- a/lib/types/manager.js
++++ b/lib/types/manager.js
+@@ -754,6 +754,12 @@
+                     structured = attachStructuredRuntime(childCtx, inputs.outputSchema, () => child.inbox.nextStep.length === 0
+                         && child.inbox.nextTurn.length === 0);
+                 }
++                const setupParent = create?.parent ?? (child.session.header.parentSession === undefined ? inputs.root : this.ctx.agents.get(child.session.header.parentSession) ?? inputs.root);
++                return await this.host.prepareChildSetup({
++                    childCtx, child, parent: setupParent,
++                    source: create === undefined ? 'resume' : 'startup',
++                    signal: inputs.signal,
++                });
+             };
+             const handle = create === undefined
+                 ? await this.ownerCtx.agents.resume({
 --- a/lib/types/types.d.ts
 +++ b/lib/types/types.d.ts
-@@ -21,6 +21,19 @@
+@@ -19,6 +19,18 @@
   * @returns the same string, branded.
   */
  export declare function SubagentRunId(id: string): SubagentRunId;
-+
 +/** Trusted unpublished child setup. No Agent driving or publication is allowed here. */
 +export interface ChildSetupContext {
 +    readonly childCtx: import('@deepseek-ai/cordis').Context;
@@ -119,16 +179,16 @@
 +    void | import('@deepseek-ai/dsh-agent').AgentSetupCommit |
 +    Promise<void | import('@deepseek-ai/dsh-agent').AgentSetupCommit>;
  /** One managed child execution and its result delivery policy. */
- export interface SubagentActivationSpec {
+ export interface SubagentActivationSpec extends Omit<SubagentStartRequest, 'label' | 'signal'> {
      /** Registered backend to use. */
 --- a/lib/types/index.d.ts
 +++ b/lib/types/index.d.ts
 @@ -44,7 +44,7 @@
- export * from './out-of-process.ts';
  export { AssistantOutputFold, finalAssistantOutput } from './assistant-output.ts';
  export { SubagentRunId } from './types.ts';
--export type { ContinuableCreateRequest, ContinuableCreateSpec, SubagentCapabilities, SubagentActivation, SubagentActivationSpec, SubagentInterruptAuthority, SubagentProvider, SubagentResult, SubagentRun, SubagentSendMessageOptions, SubagentStartRequest, ResolvedSubagentStartRequest, SubagentStopReason, SubagentStopReasonMap, } from './types.ts';
-+export type { ChildSetupContext, ChildSetupCallback, ContinuableCreateRequest, ContinuableCreateSpec, SubagentCapabilities, SubagentActivation, SubagentActivationSpec, SubagentInterruptAuthority, SubagentProvider, SubagentResult, SubagentRun, SubagentSendMessageOptions, SubagentStartRequest, ResolvedSubagentStartRequest, SubagentStopReason, SubagentStopReasonMap, } from './types.ts';
+ export { ROOT_AGENT_NAME } from './names.ts';
+-export type { ContinuableCreateRequest, ContinuableCreateSpec, SubagentCapabilities, SubagentActivation, SubagentActivationSpec, SubagentInterruptAuthority, SubagentMemberNames, SubagentProvider, SubagentResult, SubagentRun, SubagentSendMessageOptions, SubagentStartRequest, ResolvedSubagentStartRequest, SubagentStopReason, SubagentStopReasonMap, } from './types.ts';
++export type { ChildSetupContext, ChildSetupCallback, ContinuableCreateRequest, ContinuableCreateSpec, SubagentCapabilities, SubagentActivation, SubagentActivationSpec, SubagentInterruptAuthority, SubagentMemberNames, SubagentProvider, SubagentResult, SubagentRun, SubagentSendMessageOptions, SubagentStartRequest, ResolvedSubagentStartRequest, SubagentStopReason, SubagentStopReasonMap, } from './types.ts';
  export { foldSubagentDescriptor, snapshotSubagentDescriptor, SUBAGENT_DESCRIPTOR_VERSION, } from './descriptor.ts';
  export type { ContinuableSubagentDescriptorData, ContinuableSubagentDescriptorInput, OneShotSubagentDescriptorData, SubagentDescriptorData, } from './descriptor.ts';
  export { STRUCTURED_OUTPUT_TOOL } from './structured.ts';
@@ -146,11 +206,11 @@
       * @param configured - Explicit tool limit, or provider-managed for external delegation.
 --- a/lib/types/manager.d.ts
 +++ b/lib/types/manager.d.ts
-@@ -13,6 +13,7 @@
- import type { ContinuableCreateRequest, ContinuableCreateSpec, SubagentInterruptAuthority, SubagentActivationSpec, SubagentActivation, SubagentRun, SubagentSendMessageOptions, ResolvedSubagentStartRequest } from './types.ts';
+@@ -25,6 +25,7 @@
+ };
  /** Package-private hooks supplied by the owning service. */
  interface SubagentHost {
 +    prepareChildSetup(payload: import('./types.ts').ChildSetupContext): Promise<import('@deepseek-ai/dsh-agent').AgentSetupCommit>;
-     startExternal(name: string, request: ResolvedSubagentStartRequest): Promise<SubagentRun>;
-     /** Resolve one provider's detached continuable-creation contribution. */
-     prepareContinuable(name: string, request: ContinuableCreateRequest): Promise<ContinuableCreateSpec>;
+     /** Read the current descriptor identity through the service-owned projection. */
+     identityOf(session: Session): SubagentIdentityProjection | undefined;
+     /** Read a live Session's direct-child catalog through the service-owned projection. */

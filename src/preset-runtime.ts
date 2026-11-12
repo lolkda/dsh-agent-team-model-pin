@@ -4,12 +4,13 @@
  * before dispatch; rebinding there would run the old preset's initializers.
  *
  * Requires the explicitly advertised native child-setup extension. Stock rc.2
- * keeps all model-only behavior and rejects explicitly configured preset work.
+ * lacks that pre-publication seam; the image applies the maintained host patch.
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { AgentPresetRegistry } from '@deepseek-ai/dsh-agent-preset-registry';
 import { supportsTeamPresetRuntime } from './preset-capability.ts';
+import { resolveTeamMembership } from './team-membership.ts';
 
 export { supportsTeamPresetRuntime } from './preset-capability.ts';
 export type TeamPresetCapture = (leadId: string) => string | null | undefined;
@@ -27,7 +28,7 @@ interface ChildSetupRuntime {
   readonly childSetupVersion: 1;
   registerChildSetup(callback: (input: TeamPresetChildSetup) => Promise<TeamPresetSetupCommit | void>): () => void;
 }
-interface Teams {
+interface LegacyTeams {
   tryMembership(agent: Agent): { role: 'lead' | 'teammate'; root: Agent } | undefined;
   listMembers(parent: Agent): readonly { id: string; role: 'lead' | 'teammate'; status?: string }[];
 }
@@ -66,15 +67,15 @@ function requirePresets(host: ServiceAccess): Presets {
  * The native activation still owns policies, persona/tool restrictions, registry
  * publication and failure cleanup. Ordinary subagents and Leads are untouched.
  */
-export function installTeamPresetRuntime(host: Context, capture: TeamPresetCapture): void {
+export function installTeamPresetRuntime(host: Context, capture: TeamPresetCapture, membershipAccess: ServiceAccess = host as unknown as ServiceAccess): void {
   const access = host as unknown as ServiceAccess;
   let attached: object | undefined;
   {
     // Compatibility guard only: NEVER mount from this late event. A manually
     // edited explicit setting must not silently run a child with the Lead preset.
-    host.on('agent/created', ({ agent, source }) => {
+    const offGuard = host.on('agent/created', ({ agent, source }) => {
       if (attached !== undefined) return;
-      const membership = service<Teams>(access, 'agentTeams')?.tryMembership(agent);
+      const membership = resolveTeamMembership(membershipAccess, agent);
       if (membership?.role !== 'teammate') return;
       if (source === 'resume') {
         // Old/custom model-only drivers may not expose the native Session log.
@@ -93,9 +94,10 @@ export function installTeamPresetRuntime(host: Context, capture: TeamPresetCaptu
       presetId(requested, 'configured');
       throw new Error('agent-team-model-pin: 当前 DSH 缺少安全的队友创建前预设接口（childSetupVersion=1）；本次队友创建已拒绝，未以其他预设继续运行。');
     });
+    host.effect(() => () => offGuard());
   }
-  // The plugin's required dependencies intentionally exclude subagents. Bind
-  // when it appears, and let Cordis remove this registration on service unload.
+  // Keep the native runtime bound only while the subagents service is present;
+  // Cordis removes this registration on service unload.
   host.inject(['subagents'], childHost => {
     if (!supportsTeamPresetRuntime(childHost as unknown as ServiceAccess)) return;
     installNativePresetRuntime(childHost, capture);
@@ -110,12 +112,21 @@ function installNativePresetRuntime(host: Context, capture: TeamPresetCapture): 
   let active = true;
   const runtime = service<ChildSetupRuntime>(access, 'subagents')!;
   const stop = runtime.registerChildSetup(async ({ childCtx, child, parent, source, signal }) => {
-    const teams = service<Teams>(access, 'agentTeams');
-    const membership = teams?.tryMembership(parent);
-    if (!teams || membership?.role !== 'lead' || membership.root !== parent) return;
-    // tryMembership(child) is deliberately NOT used: this child is unpublished.
-    if (child.session.header.parentSession !== parent.id
-      || !teams.listMembers(parent).some(row => row.id === child.id && row.role === 'teammate' && row.status !== 'failed')) return;
+    const legacyTeams = service<LegacyTeams>(access, 'agentTeams');
+    const membership = resolveTeamMembership(access, parent);
+    if (membership === undefined) return;
+    if (typeof legacyTeams?.tryMembership === 'function') {
+      // The 0.2.1 roster only has direct Lead children; preserve that boundary.
+      if (membership.role !== 'lead' || membership.root !== parent) return;
+      // tryMembership(child) is deliberately NOT used: this child is unpublished.
+      if (child.session.header.parentSession !== parent.id
+        || !legacyTeams.listMembers(parent).some(row => row.id === child.id && row.role === 'teammate' && row.status !== 'failed')) return;
+    } else if (child.session.header.parentSession !== parent.id) {
+      // DSH 0.2.2 has one tree identity: every descendant of an enabled root
+      // is a Team member, and this exact parent is the one being composed.
+      return;
+    }
+    const leadId = membership.root.id;
 
     const assertInitializing = (): void => {
       signal.throwIfAborted();
@@ -139,7 +150,7 @@ function installNativePresetRuntime(host: Context, capture: TeamPresetCapture): 
     } else if (source === 'startup') {
       // Capture synchronously before the first await: concurrent menu changes
       // affect future creations, not this one in-flight child.
-      const requested = capture(parent.id);
+      const requested = capture(leadId);
       if (requested === null || requested === undefined) {
         const available = service<Partial<Presets>>(access, 'agentPresets');
         if (typeof available?.composedPreset !== 'function') return;

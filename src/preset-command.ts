@@ -2,6 +2,7 @@
 import { assertPresetSelectable, parsePresetSave } from './preset-policy.ts';
 import type { PresetCatalog } from './preset-policy.ts';
 import { PRESET_RUNTIME_REQUIRED, supportsTeamPresetRuntime } from './preset-capability.ts';
+import { resolveTeamMembership } from './team-membership.ts';
 
 interface MemberAgent { id: string }
 interface Settings {
@@ -10,8 +11,6 @@ interface Settings {
 }
 interface PresetCommandHost {
   get(name: string): unknown;
-  agentTeams: { tryMembership(agent: MemberAgent): { root: MemberAgent; role: 'lead' | 'teammate' } | undefined };
-
 }
 const scopeNotice = '仅作用于之后新建的队友；Lead 和已存在队友不变。模型与思考等级设置不受影响。';
 const textOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -27,7 +26,7 @@ export function createPresetCommand(host: PresetCommandHost, entryId: () => stri
         // guidance, not a second CLI with list/set/show/follow/clear aliases.
         const save = parsePresetSave(rawInput);
         if (!save) return { kind: 'error', text: '请在 Web 中直接输入 /team-preset，从选择面板选择预设，无需填写参数。' };
-        const membership = host.agentTeams.tryMembership(agent);
+        const membership = resolveTeamMembership(host, agent);
         if (!membership) return { kind: 'error', text: '当前 Agent 不属于可配置的 Agent Team，未写入设置。' };
         const leadId = membership.root.id;
         const { choice } = save;

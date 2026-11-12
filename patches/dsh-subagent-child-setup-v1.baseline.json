@@ -1,22 +1,30 @@
 {
   "package": "@deepseek-ai/dsh-subagent",
-  "version": "0.2.2-rc.1",
+  "version": "0.2.2-rc.2",
   "files": {
     "lib/index.js": {
-      "beforeSha256": "5aad8aadee1879f1e8a878431630f885adbe6f9ee9cb1832838abbc56bc1fbea",
-      "afterSha256": "2f5a94be1093b05e89cdb83f5e40b7e202d915463f1b094bbe4f88810fd5828a"
+      "beforeSha256": "47837c0cd3cd8259fbdd14b7a477f3df3f928946c5b9e261f35a883411ba3697",
+      "afterSha256": "edeee70804ae593503e901679f33dbb2b7074c7068d8d6de77d3549e5489606d"
+    },
+    "lib/types/index.js": {
+      "beforeSha256": "f3ff8030b7adbf498ae05100b4c5fa060f3065ca9f2f7d1d95bebef09d669265",
+      "afterSha256": "a185f9115719698a88fb2a907cf12612932ced6354aa66f15bb78c2143edd43d"
+    },
+    "lib/types/manager.js": {
+      "beforeSha256": "47771ec92beff268c857a24bb68532a74ac77d5e56d2906552ac2a98e7df4ca6",
+      "afterSha256": "13c841c294c983e4edb2e569152948452a09b6ce6ab8c003132298dfd667e0fa"
     },
     "lib/types/types.d.ts": {
-      "beforeSha256": "725145479cd332c4ea6ff6b830e696b3e4976173dbb1ab3d57f432a2fbaefd03",
-      "afterSha256": "9ac946da615e141cc30cb37432482a2b5a3d570810f9e4fd941940957e0572d2"
+      "beforeSha256": "6ca5691a52fa26a4e3b90d2308ae8bc6b17685f6cd2fe2521665a5dcacbf961c",
+      "afterSha256": "5cab3b1846b62ec7cfc1b8915f746fa0d7326ae05f48b85c14c317ec3daf6229"
     },
     "lib/types/index.d.ts": {
-      "beforeSha256": "8c14f1b72c4ef02650ca3903818328e241712273325367d73134abfc1ba4d33d",
-      "afterSha256": "b99134a1c18d9bb9294f9714f000240ec40fdb4d411c201d3bbdfec83f70b2c8"
+      "beforeSha256": "4dbb961ddc10e462278bd55c13d1d9e51c5113d7cef8fb38067f78c47c3e5f10",
+      "afterSha256": "3ac1cf43591571e3e4dac3051eaab25dd95dedea2c7dfccf5e494b42c17923a9"
     },
     "lib/types/manager.d.ts": {
-      "beforeSha256": "25f1f59b3acf4474db3b79c5fbdb7c7044d74936ce63c4c4aea9657cf51e7189",
-      "afterSha256": "33e8e754bb3df5788b97be17554f705ed40a64ba78417a7bdc746f309788dc89"
+      "beforeSha256": "af6628999610348726a06a5741ed855b23ea4ee78b3ad477d32aa42bfe1970b8",
+      "afterSha256": "ce1bbbf2b25fe5f8136aad311706a2079772aea2121d08db0fc7c958ca0f5ced"
     }
   }
 }
